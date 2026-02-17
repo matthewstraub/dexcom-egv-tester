@@ -59,6 +59,23 @@ export const appRouter = router({
         })
       )
       .query(async ({ ctx, input }) => {
+        // Validate date range (Dexcom API max 30 days)
+        const start = new Date(input.startDate);
+        const end = new Date(input.endDate);
+        if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+          throw new Error("Invalid date format. Please use ISO 8601 format (e.g. 2024-01-15T10:30:00).");
+        }
+        if (start >= end) {
+          throw new Error("startDate must be before endDate.");
+        }
+        const diffMs = end.getTime() - start.getTime();
+        const diffDays = diffMs / (1000 * 60 * 60 * 24);
+        if (diffDays > 30) {
+          throw new Error(
+            `Date range exceeds the Dexcom API maximum of 30 days. Your range is ${diffDays.toFixed(1)} days. Please narrow your query window.`
+          );
+        }
+
         const accessToken = await getValidAccessToken(ctx.user.id);
         if (!accessToken) {
           throw new Error("Not connected to Dexcom. Please authorize first.");
@@ -72,9 +89,13 @@ export const appRouter = router({
           return data;
         } catch (err: any) {
           const errData = err?.response?.data;
-          throw new Error(
-            errData?.message || errData?.error_description || "Failed to fetch EGV data from Dexcom"
-          );
+          const msg = errData?.message || errData?.error_description || "";
+          if (msg.toLowerCase().includes("date range") || msg.toLowerCase().includes("invalid")) {
+            throw new Error(
+              `Dexcom API error: ${msg}. Note: date range must be \u226430 days, and dates must be ISO 8601 UTC timestamps.`
+            );
+          }
+          throw new Error(msg || "Failed to fetch EGV data from Dexcom");
         }
       }),
   }),

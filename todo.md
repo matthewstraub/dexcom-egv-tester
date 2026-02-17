@@ -10,3 +10,4 @@
 - [x] Build raw JSON response viewer with syntax highlighting
 - [x] Add date range picker for EGV queries
 - [x] Write vitest tests for backend routes
+- [x] Fix 'Invalid Date Range Error' when querying EGV data

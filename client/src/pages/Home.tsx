@@ -128,6 +128,12 @@ export default function Home() {
 
   const handleFetchEgvs = () => {
     if (!startDate || !endDate) { toast.error("Please enter both start and end dates"); return; }
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) { toast.error("Invalid date format"); return; }
+    if (start >= end) { toast.error("Start date must be before end date"); return; }
+    const diffDays = (end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24);
+    if (diffDays > 30) { toast.error(`Date range is ${diffDays.toFixed(1)} days. Dexcom API maximum is 30 days.`); return; }
     setQueryEnabled(true);
   };
 
@@ -277,11 +283,25 @@ export default function Home() {
                     </Button>
                   </div>
                 </div>
-                {dataRange.data?.egvs && (
-                  <div className="mt-3 px-3 py-2 rounded-md bg-secondary/30 border border-border">
-                    <span className="text-xs font-mono text-muted-foreground">Available range: <span className="text-foreground">{new Date(dataRange.data.egvs.start.systemTime).toLocaleDateString()}</span> → <span className="text-foreground">{new Date(dataRange.data.egvs.end.systemTime).toLocaleDateString()}</span></span>
-                  </div>
-                )}
+                <div className="mt-3 space-y-2">
+                  {startDate && endDate && (() => {
+                    const diff = (new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24);
+                    const isOver = diff > 30;
+                    return (
+                      <div className={"px-3 py-2 rounded-md border " + (isOver ? "bg-destructive/10 border-destructive/30" : "bg-secondary/30 border-border")}>
+                        <span className={"text-xs font-mono " + (isOver ? "text-destructive" : "text-muted-foreground")}>
+                          Selected range: <span className={isOver ? "text-destructive font-medium" : "text-foreground"}>{diff.toFixed(1)} days</span>
+                          {isOver && " (max 30 days)"}
+                        </span>
+                      </div>
+                    );
+                  })()}
+                  {dataRange.data?.egvs && (
+                    <div className="px-3 py-2 rounded-md bg-secondary/30 border border-border">
+                      <span className="text-xs font-mono text-muted-foreground">Available range: <span className="text-foreground">{new Date(dataRange.data.egvs.start.systemTime).toLocaleDateString()}</span> → <span className="text-foreground">{new Date(dataRange.data.egvs.end.systemTime).toLocaleDateString()}</span> <span className="text-muted-foreground">(max 30-day window per query)</span></span>
+                    </div>
+                  )}
+                </div>
               </CardContent>
             </Card>
 

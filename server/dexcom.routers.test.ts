@@ -47,9 +47,42 @@ describe("dexcom routers", () => {
   });
 
   it("dexcom.status returns disconnected for user with no tokens", async () => {
-    const caller = appRouter.createCaller(createAuthContext());
+    const ctx = createAuthContext();
+    // Use a user ID that won't have tokens in the database
+    ctx.user!.id = 99999;
+    const caller = appRouter.createCaller(ctx);
     const result = await caller.dexcom.status();
     expect(result).toHaveProperty("connected");
     expect(result.connected).toBe(false);
+  });
+
+  it("dexcom.egvs rejects date range exceeding 30 days", async () => {
+    const caller = appRouter.createCaller(createAuthContext());
+    await expect(
+      caller.dexcom.egvs({
+        startDate: "2024-01-01T00:00:00",
+        endDate: "2024-02-15T00:00:00",
+      })
+    ).rejects.toThrow(/exceeds the Dexcom API maximum of 30 days/);
+  });
+
+  it("dexcom.egvs rejects when startDate is after endDate", async () => {
+    const caller = appRouter.createCaller(createAuthContext());
+    await expect(
+      caller.dexcom.egvs({
+        startDate: "2024-01-15T00:00:00",
+        endDate: "2024-01-10T00:00:00",
+      })
+    ).rejects.toThrow(/startDate must be before endDate/);
+  });
+
+  it("dexcom.egvs rejects invalid date format", async () => {
+    const caller = appRouter.createCaller(createAuthContext());
+    await expect(
+      caller.dexcom.egvs({
+        startDate: "not-a-date",
+        endDate: "2024-01-10T00:00:00",
+      })
+    ).rejects.toThrow(/Invalid date format/);
   });
 });
