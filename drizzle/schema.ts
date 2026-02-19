@@ -29,6 +29,8 @@ export const dexcomTokens = mysqlTable("dexcom_tokens", {
   refreshToken: text("refreshToken").notNull(),
   expiresAt: timestamp("expiresAt").notNull(),
   sandboxUser: varchar("sandboxUser", { length: 64 }),
+  /** Which Dexcom environment this token is for: "sandbox" or "production" */
+  environment: mysqlEnum("environment", ["sandbox", "production"]).default("sandbox").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });

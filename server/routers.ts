@@ -1,4 +1,4 @@
-import { COOKIE_NAME } from "@shared/const";
+import { COOKIE_NAME, type DexcomEnv } from "@shared/const";
 import { z } from "zod";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
@@ -10,6 +10,8 @@ import {
   fetchDataRange,
   disconnectDexcom,
 } from "./dexcom";
+
+const dexcomEnvSchema = z.enum(["sandbox", "production"]);
 
 export const appRouter = router({
   system: systemRouter,
@@ -23,32 +25,41 @@ export const appRouter = router({
   }),
 
   dexcom: router({
-    /** Get the current Dexcom connection status */
-    status: protectedProcedure.query(async ({ ctx }) => {
-      return getDexcomConnectionStatus(ctx.user.id);
-    }),
+    /** Get the current Dexcom connection status for a given environment */
+    status: protectedProcedure
+      .input(z.object({ env: dexcomEnvSchema }).optional())
+      .query(async ({ ctx, input }) => {
+        const env: DexcomEnv = input?.env ?? "sandbox";
+        return getDexcomConnectionStatus(ctx.user.id, env);
+      }),
 
-    /** Disconnect from Dexcom (remove stored tokens) */
-    disconnect: protectedProcedure.mutation(async ({ ctx }) => {
-      await disconnectDexcom(ctx.user.id);
-      return { success: true };
-    }),
+    /** Disconnect from Dexcom (remove stored tokens) for a given environment */
+    disconnect: protectedProcedure
+      .input(z.object({ env: dexcomEnvSchema }).optional())
+      .mutation(async ({ ctx, input }) => {
+        const env: DexcomEnv = input?.env ?? "sandbox";
+        await disconnectDexcom(ctx.user.id, env);
+        return { success: true };
+      }),
 
     /** Fetch the available data range for the connected Dexcom user */
-    dataRange: protectedProcedure.query(async ({ ctx }) => {
-      const accessToken = await getValidAccessToken(ctx.user.id);
-      if (!accessToken) {
-        throw new Error("Not connected to Dexcom. Please authorize first.");
-      }
-      try {
-        const data = await fetchDataRange(accessToken);
-        return data;
-      } catch (err: any) {
-        throw new Error(
-          err?.response?.data?.message || "Failed to fetch data range from Dexcom"
-        );
-      }
-    }),
+    dataRange: protectedProcedure
+      .input(z.object({ env: dexcomEnvSchema }).optional())
+      .query(async ({ ctx, input }) => {
+        const env: DexcomEnv = input?.env ?? "sandbox";
+        const accessToken = await getValidAccessToken(ctx.user.id, env);
+        if (!accessToken) {
+          throw new Error("Not connected to Dexcom. Please authorize first.");
+        }
+        try {
+          const data = await fetchDataRange(accessToken, env);
+          return data;
+        } catch (err: any) {
+          throw new Error(
+            err?.response?.data?.message || "Failed to fetch data range from Dexcom"
+          );
+        }
+      }),
 
     /** Fetch EGV data for a given date range */
     egvs: protectedProcedure
@@ -56,9 +67,12 @@ export const appRouter = router({
         z.object({
           startDate: z.string(),
           endDate: z.string(),
+          env: dexcomEnvSchema.optional(),
         })
       )
       .query(async ({ ctx, input }) => {
+        const env: DexcomEnv = input.env ?? "sandbox";
+
         // Validate date range (Dexcom API max 30 days)
         const start = new Date(input.startDate);
         const end = new Date(input.endDate);
@@ -76,7 +90,7 @@ export const appRouter = router({
           );
         }
 
-        const accessToken = await getValidAccessToken(ctx.user.id);
+        const accessToken = await getValidAccessToken(ctx.user.id, env);
         if (!accessToken) {
           throw new Error("Not connected to Dexcom. Please authorize first.");
         }
@@ -84,7 +98,8 @@ export const appRouter = router({
           const data = await fetchEgvData(
             accessToken,
             input.startDate,
-            input.endDate
+            input.endDate,
+            env
           );
           return data;
         } catch (err: any) {

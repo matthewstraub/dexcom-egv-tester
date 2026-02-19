@@ -1,0 +1,1 @@
+ALTER TABLE `dexcom_tokens` ADD `environment` enum('sandbox','production') DEFAULT 'sandbox' NOT NULL;

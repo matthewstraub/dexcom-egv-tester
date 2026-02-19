@@ -11,19 +11,21 @@ import { EgvChart } from "@/components/EgvChart";
 import { JsonViewer } from "@/components/JsonViewer";
 import {
   Activity, CheckCircle2, Circle, ExternalLink, Loader2, LogOut,
-  Plug, PlugZap, Terminal, Unplug, XCircle,
+  Plug, PlugZap, Terminal, Unplug, XCircle, Globe, FlaskConical,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import type { DexcomEnv } from "../../../shared/const";
+import { DEXCOM_BASE_URLS } from "../../../shared/const";
 
 const TREND_MAP: Record<string, { arrow: string; range: string }> = {
-  doubleUp: { arrow: "⬆⬆", range: "(+3 to +8)" },
-  singleUp: { arrow: "⬆", range: "(+2 to +3)" },
-  fortyFiveUp: { arrow: "↗", range: "(+1 to +2)" },
-  flat: { arrow: "→", range: "(-1 to +1)" },
-  fortyFiveDown: { arrow: "↘", range: "(-2 to -1)" },
-  singleDown: { arrow: "⬇", range: "(-3 to -2)" },
-  doubleDown: { arrow: "⬇⬇", range: "(-8 to -3)" },
+  doubleUp: { arrow: "\u2B06\u2B06", range: "(+3 to +8)" },
+  singleUp: { arrow: "\u2B06", range: "(+2 to +3)" },
+  fortyFiveUp: { arrow: "\u2197", range: "(+1 to +2)" },
+  flat: { arrow: "\u2192", range: "(-1 to +1)" },
+  fortyFiveDown: { arrow: "\u2198", range: "(-2 to -1)" },
+  singleDown: { arrow: "\u2B07", range: "(-3 to -2)" },
+  doubleDown: { arrow: "\u2B07\u2B07", range: "(-8 to -3)" },
 };
 
 function OAuthStep({ step, title, description, status }: { step: number; title: string; description: string; status: "pending" | "complete" | "ready" }) {
@@ -36,7 +38,7 @@ function OAuthStep({ step, title, description, status }: { step: number; title: 
   return (
     <div className="flex items-start gap-3">
       <div className={"w-6 h-6 rounded-full flex items-center justify-center text-xs font-mono shrink-0 " + cls}>
-        {status === "complete" ? "✓" : step}
+        {status === "complete" ? "\u2713" : step}
       </div>
       <div>
         <p className={"text-sm font-medium " + textCls}>{title}</p>
@@ -59,37 +61,82 @@ function ParamRow({ name, type, required, description }: { name: string; type: s
   );
 }
 
+function EnvToggle({ env, onChange }: { env: DexcomEnv; onChange: (env: DexcomEnv) => void }) {
+  return (
+    <div className="flex items-center gap-1 p-0.5 rounded-lg bg-secondary/50 border border-border">
+      <button
+        onClick={() => onChange("sandbox")}
+        className={
+          "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-mono transition-all " +
+          (env === "sandbox"
+            ? "bg-amber-500/15 text-amber-400 border border-amber-500/30"
+            : "text-muted-foreground hover:text-foreground")
+        }
+      >
+        <FlaskConical className="h-3 w-3" />
+        Sandbox
+      </button>
+      <button
+        onClick={() => onChange("production")}
+        className={
+          "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-mono transition-all " +
+          (env === "production"
+            ? "bg-green-500/15 text-green-400 border border-green-500/30"
+            : "text-muted-foreground hover:text-foreground")
+        }
+      >
+        <Globe className="h-3 w-3" />
+        Production
+      </button>
+    </div>
+  );
+}
+
 export default function Home() {
   const { user, loading, isAuthenticated, logout } = useAuth();
   const [activeTab, setActiveTab] = useState("connect");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [queryEnabled, setQueryEnabled] = useState(false);
+  const [dexcomEnv, setDexcomEnv] = useState<DexcomEnv>("sandbox");
 
-  const dexcomStatus = trpc.dexcom.status.useQuery(undefined, {
-    enabled: isAuthenticated,
-    refetchOnWindowFocus: false,
-  });
+  const dexcomStatus = trpc.dexcom.status.useQuery(
+    { env: dexcomEnv },
+    { enabled: isAuthenticated, refetchOnWindowFocus: false }
+  );
 
-  const dataRange = trpc.dexcom.dataRange.useQuery(undefined, {
-    enabled: isAuthenticated && dexcomStatus.data?.connected === true,
-    refetchOnWindowFocus: false,
-    retry: false,
-  });
+  const dataRange = trpc.dexcom.dataRange.useQuery(
+    { env: dexcomEnv },
+    {
+      enabled: isAuthenticated && dexcomStatus.data?.connected === true,
+      refetchOnWindowFocus: false,
+      retry: false,
+    }
+  );
 
   const egvQuery = trpc.dexcom.egvs.useQuery(
-    { startDate, endDate },
+    { startDate, endDate, env: dexcomEnv },
     { enabled: queryEnabled && !!startDate && !!endDate, refetchOnWindowFocus: false, retry: false }
   );
 
   const disconnectMutation = trpc.dexcom.disconnect.useMutation({
-    onSuccess: () => { toast.success("Disconnected from Dexcom"); dexcomStatus.refetch(); },
+    onSuccess: () => { toast.success(`Disconnected from Dexcom (${dexcomEnv})`); dexcomStatus.refetch(); },
   });
+
+  // Handle env change: reset query state and refetch status
+  const handleEnvChange = (newEnv: DexcomEnv) => {
+    setDexcomEnv(newEnv);
+    setQueryEnabled(false);
+    setStartDate("");
+    setEndDate("");
+  };
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get("dexcom_connected") === "true") {
-      toast.success("Successfully connected to Dexcom!");
+      const connectedEnv = (params.get("env") as DexcomEnv) || "sandbox";
+      setDexcomEnv(connectedEnv);
+      toast.success(`Successfully connected to Dexcom (${connectedEnv})!`);
       dexcomStatus.refetch();
       setActiveTab("data");
       window.history.replaceState({}, "", "/");
@@ -119,7 +166,7 @@ export default function Home() {
   const handleConnect = async () => {
     try {
       const origin = window.location.origin;
-      const response = await fetch("/api/dexcom/authorize?origin=" + encodeURIComponent(origin));
+      const response = await fetch(`/api/dexcom/authorize?origin=${encodeURIComponent(origin)}&env=${dexcomEnv}`);
       const data = await response.json();
       if (data.authUrl) window.location.href = data.authUrl;
       else toast.error("Failed to get authorization URL");
@@ -138,6 +185,8 @@ export default function Home() {
   };
 
   const recordCount = egvQuery.data?.records?.length ?? 0;
+  const baseUrl = DEXCOM_BASE_URLS[dexcomEnv];
+  const isProduction = dexcomEnv === "production";
 
   if (loading) {
     return (
@@ -179,10 +228,12 @@ export default function Home() {
             </div>
             <div>
               <h1 className="text-sm font-semibold tracking-tight">Dexcom EGV Tester</h1>
-              <p className="text-[10px] font-mono text-muted-foreground">sandbox-api.dexcom.com</p>
+              <p className="text-[10px] font-mono text-muted-foreground">{baseUrl.replace("https://", "")}</p>
             </div>
           </div>
           <div className="flex items-center gap-3">
+            <EnvToggle env={dexcomEnv} onChange={handleEnvChange} />
+            <Separator orientation="vertical" className="h-6" />
             <div className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-secondary/50 border border-border">
               {dexcomStatus.data?.connected ? (
                 <><Circle className="h-2 w-2 fill-green-400 text-green-400" /><span className="text-xs font-mono text-green-400">Connected</span></>
@@ -208,24 +259,58 @@ export default function Home() {
           </TabsList>
 
           <TabsContent value="connect" className="space-y-6">
+            {isProduction && (
+              <Card className="bg-amber-500/5 border-amber-500/20">
+                <CardContent className="pt-6">
+                  <div className="flex items-start gap-3">
+                    <Globe className="h-5 w-5 text-amber-400 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-sm font-medium text-amber-400">Production Environment</p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        You are connecting to the <strong>production</strong> Dexcom API. This will access real patient data.
+                        The user who authorizes will sign in with their actual Dexcom account credentials.
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
             <div className="grid gap-6 lg:grid-cols-2">
               <Card className="bg-card border-border">
                 <CardHeader><CardTitle className="text-base flex items-center gap-2"><PlugZap className="h-4 w-4 text-primary" />Dexcom OAuth2 Connection</CardTitle></CardHeader>
                 <CardContent className="space-y-4">
                   <div className="space-y-3">
-                    <OAuthStep step={1} title="Redirect to Dexcom Login" description="User is redirected to sandbox-api.dexcom.com for authentication" status={dexcomStatus.data?.connected ? "complete" : "pending"} />
-                    <OAuthStep step={2} title="User Authorizes Access" description="Select sandbox user and grant HIPAA authorization" status={dexcomStatus.data?.connected ? "complete" : "pending"} />
+                    <OAuthStep
+                      step={1}
+                      title="Redirect to Dexcom Login"
+                      description={`User is redirected to ${baseUrl.replace("https://", "")} for authentication`}
+                      status={dexcomStatus.data?.connected ? "complete" : "pending"}
+                    />
+                    <OAuthStep
+                      step={2}
+                      title="User Authorizes Access"
+                      description={isProduction ? "User signs in with Dexcom credentials and grants authorization" : "Select sandbox user and grant HIPAA authorization"}
+                      status={dexcomStatus.data?.connected ? "complete" : "pending"}
+                    />
                     <OAuthStep step={3} title="Exchange Code for Tokens" description="Authorization code exchanged for access + refresh tokens" status={dexcomStatus.data?.connected ? "complete" : "pending"} />
                     <OAuthStep step={4} title="Fetch EGV Data" description="Use bearer token to call /v3/users/self/egvs" status={dexcomStatus.data?.connected ? "ready" : "pending"} />
                   </div>
                   <Separator />
                   {dexcomStatus.data?.connected ? (
                     <div className="space-y-3">
-                      <div className="flex items-center gap-2 text-sm"><CheckCircle2 className="h-4 w-4 text-green-400" /><span className="text-green-400 font-medium">Connected to Dexcom Sandbox</span></div>
-                      <Button variant="outline" size="sm" onClick={() => disconnectMutation.mutate()} disabled={disconnectMutation.isPending} className="text-destructive hover:text-destructive"><Unplug className="h-3.5 w-3.5 mr-1.5" />Disconnect</Button>
+                      <div className="flex items-center gap-2 text-sm">
+                        <CheckCircle2 className="h-4 w-4 text-green-400" />
+                        <span className="text-green-400 font-medium">Connected to Dexcom {isProduction ? "Production" : "Sandbox"}</span>
+                      </div>
+                      <Button variant="outline" size="sm" onClick={() => disconnectMutation.mutate({ env: dexcomEnv })} disabled={disconnectMutation.isPending} className="text-destructive hover:text-destructive">
+                        <Unplug className="h-3.5 w-3.5 mr-1.5" />Disconnect
+                      </Button>
                     </div>
                   ) : (
-                    <Button onClick={handleConnect} className="w-full" size="lg"><PlugZap className="h-4 w-4 mr-2" />Connect to Dexcom Sandbox</Button>
+                    <Button onClick={handleConnect} className="w-full">
+                      <PlugZap className="h-4 w-4 mr-2" />Connect to Dexcom {isProduction ? "Production" : "Sandbox"}
+                    </Button>
                   )}
                 </CardContent>
               </Card>
@@ -244,20 +329,36 @@ export default function Home() {
                     <Separator />
                     <div>
                       <label className="text-xs font-mono text-muted-foreground block mb-1.5">Environment</label>
-                      <Badge variant="secondary" className="font-mono text-xs">Sandbox</Badge>
+                      <Badge
+                        variant="secondary"
+                        className={"font-mono text-xs " + (isProduction ? "bg-green-500/10 text-green-400 border-green-500/20" : "bg-amber-500/10 text-amber-400 border-amber-500/20")}
+                      >
+                        {isProduction ? "Production" : "Sandbox"}
+                      </Badge>
                     </div>
                     <div>
                       <label className="text-xs font-mono text-muted-foreground block mb-1.5">Base URL</label>
-                      <code className="text-xs font-mono text-foreground">https://sandbox-api.dexcom.com</code>
+                      <code className="text-xs font-mono text-foreground">{baseUrl}</code>
                     </div>
-                    <div>
-                      <label className="text-xs font-mono text-muted-foreground block mb-1.5">Sandbox Users (no password required)</label>
-                      <div className="space-y-1">
-                        {[{ user: "User7", desc: "G7 Mobile App" }, { user: "User8", desc: "ONE+ Mobile App" }, { user: "User6", desc: "G6 Mobile App" }, { user: "User4", desc: "G6 Touchscreen Receiver" }].map((u) => (
-                          <div key={u.user} className="flex items-center gap-2 text-xs font-mono"><span className="text-primary">{u.user}</span><span className="text-muted-foreground">— {u.desc}</span></div>
-                        ))}
+                    {!isProduction && (
+                      <div>
+                        <label className="text-xs font-mono text-muted-foreground block mb-1.5">Sandbox Users (no password required)</label>
+                        <div className="space-y-1">
+                          {[{ user: "User7", desc: "G7 Mobile App" }, { user: "User8", desc: "ONE+ Mobile App" }, { user: "User6", desc: "G6 Mobile App" }, { user: "User4", desc: "G6 Touchscreen Receiver" }].map((u) => (
+                            <div key={u.user} className="flex items-center gap-2 text-xs font-mono"><span className="text-primary">{u.user}</span><span className="text-muted-foreground">{"\u2014"} {u.desc}</span></div>
+                          ))}
+                        </div>
                       </div>
-                    </div>
+                    )}
+                    {isProduction && (
+                      <div>
+                        <label className="text-xs font-mono text-muted-foreground block mb-1.5">Authentication</label>
+                        <p className="text-xs text-muted-foreground">
+                          In production, users sign in with their real Dexcom account credentials.
+                          The data returned will be the actual CGM data from the authorized user's device.
+                        </p>
+                      </div>
+                    )}
                   </div>
                 </CardContent>
               </Card>
@@ -298,7 +399,7 @@ export default function Home() {
                   })()}
                   {dataRange.data?.egvs && (
                     <div className="px-3 py-2 rounded-md bg-secondary/30 border border-border">
-                      <span className="text-xs font-mono text-muted-foreground">Available range: <span className="text-foreground">{new Date(dataRange.data.egvs.start.systemTime).toLocaleDateString()}</span> → <span className="text-foreground">{new Date(dataRange.data.egvs.end.systemTime).toLocaleDateString()}</span> <span className="text-muted-foreground">(max 30-day window per query)</span></span>
+                      <span className="text-xs font-mono text-muted-foreground">Available range: <span className="text-foreground">{new Date(dataRange.data.egvs.start.systemTime).toLocaleDateString()}</span> {"\u2192"} <span className="text-foreground">{new Date(dataRange.data.egvs.end.systemTime).toLocaleDateString()}</span> <span className="text-muted-foreground">(max 30-day window per query)</span></span>
                     </div>
                   )}
                 </div>
@@ -322,18 +423,22 @@ export default function Home() {
               </Card>
             )}
 
-            {egvQuery.data && <JsonViewer data={egvQuery.data} title="Response — GET /v3/users/self/egvs" maxHeight="500px" />}
-            {dataRange.data && <JsonViewer data={dataRange.data} title="Response — GET /v3/users/self/dataRange" maxHeight="300px" />}
+            {egvQuery.data && <JsonViewer data={egvQuery.data} title={`Response \u2014 GET /v3/users/self/egvs (${dexcomEnv})`} maxHeight="500px" />}
+            {dataRange.data && <JsonViewer data={dataRange.data} title={`Response \u2014 GET /v3/users/self/dataRange (${dexcomEnv})`} maxHeight="300px" />}
           </TabsContent>
 
           <TabsContent value="info" className="space-y-6">
             <Card className="bg-card border-border">
-              <CardHeader><CardTitle className="text-base">Dexcom API V3 — EGV Endpoint</CardTitle></CardHeader>
+              <CardHeader><CardTitle className="text-base">Dexcom API V3 {"\u2014"} EGV Endpoint</CardTitle></CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-3 font-mono text-sm">
                   <div className="flex items-center gap-2">
                     <Badge className="bg-green-500/10 text-green-400 border-green-500/20 font-mono text-xs">GET</Badge>
                     <code className="text-foreground">/v3/users/self/egvs</code>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <span>Base URL:</span>
+                    <code className={isProduction ? "text-green-400" : "text-amber-400"}>{baseUrl}</code>
                   </div>
                   <Separator />
                   <div>

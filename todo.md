@@ -11,3 +11,9 @@
 - [x] Add date range picker for EGV queries
 - [x] Write vitest tests for backend routes
 - [x] Fix 'Invalid Date Range Error' when querying EGV data
+- [x] Add production Dexcom API base URL support (api.dexcom.com)
+- [x] Add environment toggle (Sandbox vs Production) to backend
+- [x] Store environment preference per user in database
+- [x] Update OAuth flow to use correct base URL per environment
+- [x] Add environment toggle UI in the frontend
+- [x] Update tests for dual-environment support

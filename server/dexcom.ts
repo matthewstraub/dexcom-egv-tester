@@ -3,13 +3,20 @@ import { eq, and } from "drizzle-orm";
 import { dexcomTokens } from "../drizzle/schema";
 import { getDb } from "./db";
 import { ENV } from "./_core/env";
-
-const DEXCOM_SANDBOX_BASE = "https://sandbox-api.dexcom.com";
+import { DEXCOM_BASE_URLS, type DexcomEnv } from "@shared/const";
 
 /**
- * Build the Dexcom OAuth2 authorization URL for the sandbox environment.
+ * Get the Dexcom API base URL for a given environment.
  */
-export function getDexcomAuthUrl(redirectUri: string, state?: string): string {
+export function getDexcomBaseUrl(env: DexcomEnv): string {
+  return DEXCOM_BASE_URLS[env];
+}
+
+/**
+ * Build the Dexcom OAuth2 authorization URL.
+ */
+export function getDexcomAuthUrl(redirectUri: string, env: DexcomEnv, state?: string): string {
+  const base = getDexcomBaseUrl(env);
   const params = new URLSearchParams({
     client_id: ENV.dexcomClientId,
     redirect_uri: redirectUri,
@@ -17,15 +24,16 @@ export function getDexcomAuthUrl(redirectUri: string, state?: string): string {
     scope: "offline_access",
   });
   if (state) params.set("state", state);
-  return `${DEXCOM_SANDBOX_BASE}/v3/oauth2/login?${params.toString()}`;
+  return `${base}/v3/oauth2/login?${params.toString()}`;
 }
 
 /**
  * Exchange an authorization code for access + refresh tokens.
  */
-export async function exchangeCodeForTokens(code: string, redirectUri: string) {
+export async function exchangeCodeForTokens(code: string, redirectUri: string, env: DexcomEnv) {
+  const base = getDexcomBaseUrl(env);
   const response = await axios.post(
-    `${DEXCOM_SANDBOX_BASE}/v3/oauth2/token`,
+    `${base}/v3/oauth2/token`,
     new URLSearchParams({
       client_id: ENV.dexcomClientId,
       client_secret: ENV.dexcomClientSecret,
@@ -48,9 +56,10 @@ export async function exchangeCodeForTokens(code: string, redirectUri: string) {
 /**
  * Refresh an expired access token using the refresh token.
  */
-export async function refreshAccessToken(refreshToken: string) {
+export async function refreshAccessToken(refreshToken: string, env: DexcomEnv) {
+  const base = getDexcomBaseUrl(env);
   const response = await axios.post(
-    `${DEXCOM_SANDBOX_BASE}/v3/oauth2/token`,
+    `${base}/v3/oauth2/token`,
     new URLSearchParams({
       client_id: ENV.dexcomClientId,
       client_secret: ENV.dexcomClientSecret,
@@ -71,12 +80,14 @@ export async function refreshAccessToken(refreshToken: string) {
 
 /**
  * Save or update Dexcom tokens for a user in the database.
+ * Tokens are stored per-user per-environment.
  */
 export async function saveDexcomTokens(
   userId: number,
   accessToken: string,
   refreshToken: string,
   expiresIn: number,
+  env: DexcomEnv,
   sandboxUser?: string
 ) {
   const db = await getDb();
@@ -84,18 +95,18 @@ export async function saveDexcomTokens(
 
   const expiresAt = new Date(Date.now() + expiresIn * 1000);
 
-  // Check if user already has tokens
+  // Check if user already has tokens for this environment
   const existing = await db
     .select()
     .from(dexcomTokens)
-    .where(eq(dexcomTokens.userId, userId))
+    .where(and(eq(dexcomTokens.userId, userId), eq(dexcomTokens.environment, env)))
     .limit(1);
 
   if (existing.length > 0) {
     await db
       .update(dexcomTokens)
       .set({ accessToken, refreshToken, expiresAt, sandboxUser })
-      .where(eq(dexcomTokens.userId, userId));
+      .where(and(eq(dexcomTokens.userId, userId), eq(dexcomTokens.environment, env)));
   } else {
     await db.insert(dexcomTokens).values({
       userId,
@@ -103,21 +114,22 @@ export async function saveDexcomTokens(
       refreshToken,
       expiresAt,
       sandboxUser,
+      environment: env,
     });
   }
 }
 
 /**
- * Get a valid access token for a user, refreshing if expired.
+ * Get a valid access token for a user in a specific environment, refreshing if expired.
  */
-export async function getValidAccessToken(userId: number): Promise<string | null> {
+export async function getValidAccessToken(userId: number, env: DexcomEnv): Promise<string | null> {
   const db = await getDb();
   if (!db) return null;
 
   const rows = await db
     .select()
     .from(dexcomTokens)
-    .where(eq(dexcomTokens.userId, userId))
+    .where(and(eq(dexcomTokens.userId, userId), eq(dexcomTokens.environment, env)))
     .limit(1);
 
   if (rows.length === 0) return null;
@@ -131,7 +143,7 @@ export async function getValidAccessToken(userId: number): Promise<string | null
 
   // Token expired, refresh it
   try {
-    const refreshed = await refreshAccessToken(token.refreshToken);
+    const refreshed = await refreshAccessToken(token.refreshToken, env);
     const newExpiresAt = new Date(Date.now() + refreshed.expires_in * 1000);
 
     await db
@@ -141,33 +153,34 @@ export async function getValidAccessToken(userId: number): Promise<string | null
         refreshToken: refreshed.refresh_token,
         expiresAt: newExpiresAt,
       })
-      .where(eq(dexcomTokens.userId, userId));
+      .where(and(eq(dexcomTokens.userId, userId), eq(dexcomTokens.environment, env)));
 
     return refreshed.access_token;
   } catch (err) {
-    console.error("[Dexcom] Failed to refresh token:", err);
+    console.error(`[Dexcom] Failed to refresh token (${env}):`, err);
     return null;
   }
 }
 
 /**
- * Get the Dexcom connection status for a user.
+ * Get the Dexcom connection status for a user in a specific environment.
  */
-export async function getDexcomConnectionStatus(userId: number) {
+export async function getDexcomConnectionStatus(userId: number, env: DexcomEnv) {
   const db = await getDb();
-  if (!db) return { connected: false };
+  if (!db) return { connected: false, environment: env };
 
   const rows = await db
     .select()
     .from(dexcomTokens)
-    .where(eq(dexcomTokens.userId, userId))
+    .where(and(eq(dexcomTokens.userId, userId), eq(dexcomTokens.environment, env)))
     .limit(1);
 
-  if (rows.length === 0) return { connected: false };
+  if (rows.length === 0) return { connected: false, environment: env };
 
   const token = rows[0];
   return {
     connected: true,
+    environment: env,
     sandboxUser: token.sandboxUser,
     expiresAt: token.expiresAt.getTime(),
     isExpired: token.expiresAt.getTime() < Date.now(),
@@ -175,13 +188,15 @@ export async function getDexcomConnectionStatus(userId: number) {
 }
 
 /**
- * Disconnect Dexcom for a user (remove tokens).
+ * Disconnect Dexcom for a user in a specific environment (remove tokens).
  */
-export async function disconnectDexcom(userId: number) {
+export async function disconnectDexcom(userId: number, env: DexcomEnv) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  await db.delete(dexcomTokens).where(eq(dexcomTokens.userId, userId));
+  await db.delete(dexcomTokens).where(
+    and(eq(dexcomTokens.userId, userId), eq(dexcomTokens.environment, env))
+  );
 }
 
 /**
@@ -190,10 +205,12 @@ export async function disconnectDexcom(userId: number) {
 export async function fetchEgvData(
   accessToken: string,
   startDate: string,
-  endDate: string
+  endDate: string,
+  env: DexcomEnv
 ) {
+  const base = getDexcomBaseUrl(env);
   const response = await axios.get(
-    `${DEXCOM_SANDBOX_BASE}/v3/users/self/egvs`,
+    `${base}/v3/users/self/egvs`,
     {
       params: { startDate, endDate },
       headers: { Authorization: `Bearer ${accessToken}` },
@@ -205,9 +222,10 @@ export async function fetchEgvData(
 /**
  * Fetch data range from the Dexcom API.
  */
-export async function fetchDataRange(accessToken: string) {
+export async function fetchDataRange(accessToken: string, env: DexcomEnv) {
+  const base = getDexcomBaseUrl(env);
   const response = await axios.get(
-    `${DEXCOM_SANDBOX_BASE}/v3/users/self/dataRange`,
+    `${base}/v3/users/self/dataRange`,
     {
       headers: { Authorization: `Bearer ${accessToken}` },
     }

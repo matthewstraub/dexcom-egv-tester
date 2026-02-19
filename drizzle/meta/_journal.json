@@ -15,6 +15,13 @@
       "when": 1771363835972,
       "tag": "0001_loving_starbolt",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1771524306887,
+      "tag": "0002_workable_dazzler",
+      "breakpoints": true
     }
   ]
 }
