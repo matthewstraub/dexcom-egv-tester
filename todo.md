@@ -17,3 +17,4 @@
 - [x] Update OAuth flow to use correct base URL per environment
 - [x] Add environment toggle UI in the frontend
 - [x] Update tests for dual-environment support
+- [x] Fix crash when logging into Dexcom production OAuth flow

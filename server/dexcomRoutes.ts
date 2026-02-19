@@ -4,6 +4,36 @@ import { sdk } from "./_core/sdk";
 import type { DexcomEnv } from "@shared/const";
 
 /**
+ * Extract a human-readable error message from a Dexcom API error response.
+ * Dexcom returns errors in various formats:
+ *   - { error_description: "..." }
+ *   - { errors: [{ code: "...", title: "..." }] }
+ *   - { message: "..." }
+ */
+function extractDexcomError(err: any): string {
+  const data = err?.response?.data;
+  if (!data) return err?.message || "token_exchange_failed";
+
+  // Format: { error_description: "..." }
+  if (data.error_description) return data.error_description;
+
+  // Format: { errors: [{ code: "...", title: "..." }] }
+  if (Array.isArray(data.errors) && data.errors.length > 0) {
+    return data.errors
+      .map((e: any) => `${e.title || e.message || "Unknown error"}${e.code ? ` (${e.code})` : ""}`)
+      .join("; ");
+  }
+
+  // Format: { message: "..." }
+  if (data.message) return data.message;
+
+  // Format: { error: "..." }
+  if (data.error) return data.error;
+
+  return "token_exchange_failed";
+}
+
+/**
  * Register Dexcom OAuth routes on the Express app.
  * These are standard Express routes (not tRPC) because the Dexcom OAuth
  * redirect callback needs to be a plain GET endpoint.
@@ -49,26 +79,7 @@ export function registerDexcomRoutes(app: Express) {
     try {
       const { code, state, error: oauthError } = req.query;
 
-      if (oauthError) {
-        res.redirect(`/?dexcom_error=${encodeURIComponent(oauthError as string)}`);
-        return;
-      }
-
-      if (!code || typeof code !== "string") {
-        res.redirect("/?dexcom_error=missing_code");
-        return;
-      }
-
-      // Verify the user is authenticated via Manus session
-      let user;
-      try {
-        user = await sdk.authenticateRequest(req);
-      } catch {
-        res.redirect("/?dexcom_error=not_authenticated");
-        return;
-      }
-
-      // Parse origin and env from state
+      // Parse origin and env from state early so error redirects go to the right place
       let origin = "";
       let env: DexcomEnv = "sandbox";
       if (state && typeof state === "string") {
@@ -79,6 +90,27 @@ export function registerDexcomRoutes(app: Express) {
         } catch {
           // fallback
         }
+      }
+
+      const redirectBase = origin || `${req.protocol}://${req.get("host")}`;
+
+      if (oauthError) {
+        res.redirect(`${redirectBase}/?dexcom_error=${encodeURIComponent(oauthError as string)}&env=${env}`);
+        return;
+      }
+
+      if (!code || typeof code !== "string") {
+        res.redirect(`${redirectBase}/?dexcom_error=missing_code&env=${env}`);
+        return;
+      }
+
+      // Verify the user is authenticated via Manus session
+      let user;
+      try {
+        user = await sdk.authenticateRequest(req);
+      } catch {
+        res.redirect(`${redirectBase}/?dexcom_error=not_authenticated&env=${env}`);
+        return;
       }
 
       const redirectUri = origin
@@ -98,12 +130,27 @@ export function registerDexcomRoutes(app: Express) {
       );
 
       // Redirect back to the app with success and env info
-      const redirectTo = origin || `${req.protocol}://${req.get("host")}`;
-      res.redirect(`${redirectTo}/?dexcom_connected=true&env=${env}`);
+      res.redirect(`${redirectBase}/?dexcom_connected=true&env=${env}`);
     } catch (err: any) {
       console.error("[Dexcom] Callback error:", err?.response?.data || err);
-      const errorMsg = err?.response?.data?.error_description || "token_exchange_failed";
-      res.redirect(`/?dexcom_error=${encodeURIComponent(errorMsg)}`);
+
+      // Parse origin/env from state for the error redirect
+      let origin = "";
+      let env: DexcomEnv = "sandbox";
+      const stateParam = req.query.state;
+      if (stateParam && typeof stateParam === "string") {
+        try {
+          const parsed = JSON.parse(Buffer.from(stateParam, "base64").toString());
+          origin = parsed.origin || "";
+          env = parsed.env === "production" ? "production" : "sandbox";
+        } catch {
+          // fallback
+        }
+      }
+
+      const redirectBase = origin || `${req.protocol}://${req.get("host")}`;
+      const errorMsg = extractDexcomError(err);
+      res.redirect(`${redirectBase}/?dexcom_error=${encodeURIComponent(errorMsg)}&env=${env}`);
     }
   });
 }

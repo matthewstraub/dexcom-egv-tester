@@ -142,7 +142,11 @@ export default function Home() {
       window.history.replaceState({}, "", "/");
     }
     if (params.get("dexcom_error")) {
-      toast.error("Dexcom error: " + params.get("dexcom_error"));
+      const errorEnv = (params.get("env") as DexcomEnv) || "sandbox";
+      setDexcomEnv(errorEnv);
+      setActiveTab("connect");
+      const errorMsg = params.get("dexcom_error") || "Unknown error";
+      toast.error(`Dexcom ${errorEnv} error: ${errorMsg}`, { duration: 8000 });
       window.history.replaceState({}, "", "/");
     }
   }, []);
