@@ -18,3 +18,8 @@
 - [x] Add environment toggle UI in the frontend
 - [x] Update tests for dual-environment support
 - [x] Fix crash when logging into Dexcom production OAuth flow
+- [x] Add timezone selector (UTC vs Local) to the UI
+- [x] Update date inputs to respect timezone selection
+- [x] Update chart X-axis and tooltips to respect timezone selection
+- [x] Update data table times to respect timezone selection
+- [x] Convert local time inputs to UTC before sending to Dexcom API

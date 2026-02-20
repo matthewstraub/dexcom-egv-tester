@@ -10,6 +10,8 @@ import {
   ReferenceLine,
   ReferenceArea,
 } from "recharts";
+import type { TimezoneMode } from "../../../shared/const";
+import { formatTime, formatDateTime } from "@/lib/timezone";
 
 interface EgvRecord {
   recordId: string;
@@ -27,6 +29,7 @@ interface EgvRecord {
 
 interface EgvChartProps {
   records: EgvRecord[];
+  timezone: TimezoneMode;
 }
 
 const TREND_ARROWS: Record<string, string> = {
@@ -51,15 +54,16 @@ function getGlucoseColor(value: number | null): string {
   return "oklch(0.65 0.25 25)"; // very high - red
 }
 
-export function EgvChart({ records }: EgvChartProps) {
+export function EgvChart({ records, timezone }: EgvChartProps) {
   const chartData = useMemo(() => {
     return records
       .filter(r => r.value !== null)
       .map(r => ({
-        time: new Date(r.displayTime).getTime(),
+        time: new Date(r.systemTime).getTime(),
         value: r.value,
         trend: r.trend,
         trendRate: r.trendRate,
+        systemTime: r.systemTime,
         displayTime: r.displayTime,
       }))
       .sort((a, b) => a.time - b.time);
@@ -114,10 +118,7 @@ export function EgvChart({ records }: EgvChartProps) {
             dataKey="time"
             type="number"
             domain={["dataMin", "dataMax"]}
-            tickFormatter={(val) => {
-              const d = new Date(val);
-              return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-            }}
+            tickFormatter={(val) => formatTime(val, timezone)}
             stroke="oklch(0.45 0.02 264)"
             tick={{ fontSize: 11, fontFamily: "Fira Code" }}
           />
@@ -135,7 +136,7 @@ export function EgvChart({ records }: EgvChartProps) {
               return (
                 <div className="bg-[oklch(0.19_0.016_264)] border border-border rounded-lg px-3 py-2 shadow-lg">
                   <div className="font-mono text-xs text-muted-foreground mb-1">
-                    {new Date(d.displayTime).toLocaleString()}
+                    {formatDateTime(d.systemTime, timezone)}
                   </div>
                   <div className="flex items-baseline gap-2">
                     <span

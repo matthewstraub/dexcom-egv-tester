@@ -10,12 +10,16 @@ import { trpc } from "@/lib/trpc";
 import { EgvChart } from "@/components/EgvChart";
 import { JsonViewer } from "@/components/JsonViewer";
 import {
-  Activity, CheckCircle2, Circle, ExternalLink, Loader2, LogOut,
+  formatDate, formatDateTime, getLocalTimezoneAbbr, getLocalTimezoneName,
+  inputToApiDate, apiDateToInput,
+} from "@/lib/timezone";
+import {
+  Activity, CheckCircle2, Circle, Clock, ExternalLink, Loader2, LogOut,
   Plug, PlugZap, Terminal, Unplug, XCircle, Globe, FlaskConical,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import type { DexcomEnv } from "../../../shared/const";
+import type { DexcomEnv, TimezoneMode } from "../../../shared/const";
 import { DEXCOM_BASE_URLS } from "../../../shared/const";
 
 const TREND_MAP: Record<string, { arrow: string; range: string }> = {
@@ -92,6 +96,36 @@ function EnvToggle({ env, onChange }: { env: DexcomEnv; onChange: (env: DexcomEn
   );
 }
 
+function TimezoneToggle({ timezone, onChange }: { timezone: TimezoneMode; onChange: (tz: TimezoneMode) => void }) {
+  const localAbbr = getLocalTimezoneAbbr();
+  return (
+    <div className="flex items-center gap-1 p-0.5 rounded-lg bg-secondary/50 border border-border">
+      <button
+        onClick={() => onChange("utc")}
+        className={
+          "flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-mono transition-all " +
+          (timezone === "utc"
+            ? "bg-blue-500/15 text-blue-400 border border-blue-500/30"
+            : "text-muted-foreground hover:text-foreground")
+        }
+      >
+        UTC
+      </button>
+      <button
+        onClick={() => onChange("local")}
+        className={
+          "flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-mono transition-all " +
+          (timezone === "local"
+            ? "bg-blue-500/15 text-blue-400 border border-blue-500/30"
+            : "text-muted-foreground hover:text-foreground")
+        }
+      >
+        {localAbbr}
+      </button>
+    </div>
+  );
+}
+
 export default function Home() {
   const { user, loading, isAuthenticated, logout } = useAuth();
   const [activeTab, setActiveTab] = useState("connect");
@@ -99,6 +133,11 @@ export default function Home() {
   const [endDate, setEndDate] = useState("");
   const [queryEnabled, setQueryEnabled] = useState(false);
   const [dexcomEnv, setDexcomEnv] = useState<DexcomEnv>("sandbox");
+  const [timezone, setTimezone] = useState<TimezoneMode>("local");
+
+  const localAbbr = getLocalTimezoneAbbr();
+  const localName = getLocalTimezoneName();
+  const tzLabel = timezone === "utc" ? "UTC" : localAbbr;
 
   const dexcomStatus = trpc.dexcom.status.useQuery(
     { env: dexcomEnv },
@@ -114,8 +153,12 @@ export default function Home() {
     }
   );
 
+  // Convert input dates to UTC for the API call
+  const apiStartDate = inputToApiDate(startDate, timezone);
+  const apiEndDate = inputToApiDate(endDate, timezone);
+
   const egvQuery = trpc.dexcom.egvs.useQuery(
-    { startDate, endDate, env: dexcomEnv },
+    { startDate: apiStartDate, endDate: apiEndDate, env: dexcomEnv },
     { enabled: queryEnabled && !!startDate && !!endDate, refetchOnWindowFocus: false, retry: false }
   );
 
@@ -129,6 +172,20 @@ export default function Home() {
     setQueryEnabled(false);
     setStartDate("");
     setEndDate("");
+  };
+
+  // Handle timezone change: convert existing dates to the new timezone display
+  const handleTimezoneChange = (newTz: TimezoneMode) => {
+    if (startDate) {
+      // Convert current input value to UTC, then to the new timezone's input format
+      const utcStart = inputToApiDate(startDate, timezone);
+      setStartDate(apiDateToInput(utcStart, newTz));
+    }
+    if (endDate) {
+      const utcEnd = inputToApiDate(endDate, timezone);
+      setEndDate(apiDateToInput(utcEnd, newTz));
+    }
+    setTimezone(newTz);
   };
 
   useEffect(() => {
@@ -157,8 +214,9 @@ export default function Home() {
       if (egvRange.start?.systemTime && egvRange.end?.systemTime) {
         const endTime = new Date(egvRange.end.systemTime);
         const startTime = new Date(endTime.getTime() - 3 * 60 * 60 * 1000);
-        setStartDate(startTime.toISOString().slice(0, 19));
-        setEndDate(endTime.toISOString().slice(0, 19));
+        // Convert UTC API dates to the current timezone mode for display in inputs
+        setStartDate(apiDateToInput(startTime.toISOString(), timezone));
+        setEndDate(apiDateToInput(endTime.toISOString(), timezone));
       }
     }
   }, [dataRange.data]);
@@ -179,8 +237,11 @@ export default function Home() {
 
   const handleFetchEgvs = () => {
     if (!startDate || !endDate) { toast.error("Please enter both start and end dates"); return; }
-    const start = new Date(startDate);
-    const end = new Date(endDate);
+    // Convert to UTC for validation
+    const utcStart = inputToApiDate(startDate, timezone);
+    const utcEnd = inputToApiDate(endDate, timezone);
+    const start = new Date(utcStart);
+    const end = new Date(utcEnd);
     if (isNaN(start.getTime()) || isNaN(end.getTime())) { toast.error("Invalid date format"); return; }
     if (start >= end) { toast.error("Start date must be before end date"); return; }
     const diffDays = (end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24);
@@ -222,6 +283,16 @@ export default function Home() {
     );
   }
 
+  // Calculate range days for display
+  const rangeDays = startDate && endDate
+    ? (() => {
+        const utcS = inputToApiDate(startDate, timezone);
+        const utcE = inputToApiDate(endDate, timezone);
+        const diff = (new Date(utcE).getTime() - new Date(utcS).getTime()) / (1000 * 60 * 60 * 24);
+        return isNaN(diff) ? null : diff;
+      })()
+    : null;
+
   return (
     <div className="min-h-screen bg-background">
       <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-50">
@@ -236,6 +307,8 @@ export default function Home() {
             </div>
           </div>
           <div className="flex items-center gap-3">
+            <TimezoneToggle timezone={timezone} onChange={handleTimezoneChange} />
+            <Separator orientation="vertical" className="h-6" />
             <EnvToggle env={dexcomEnv} onChange={handleEnvChange} />
             <Separator orientation="vertical" className="h-6" />
             <div className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-secondary/50 border border-border">
@@ -371,15 +444,27 @@ export default function Home() {
 
           <TabsContent value="data" className="space-y-6">
             <Card className="bg-card border-border">
-              <CardHeader><CardTitle className="text-base flex items-center gap-2"><Activity className="h-4 w-4 text-primary" />EGV Query{recordCount > 0 && <Badge variant="secondary" className="font-mono text-xs ml-2">{recordCount} records</Badge>}</CardTitle></CardHeader>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <Activity className="h-4 w-4 text-primary" />EGV Query
+                    {recordCount > 0 && <Badge variant="secondary" className="font-mono text-xs ml-2">{recordCount} records</Badge>}
+                  </CardTitle>
+                  <div className="flex items-center gap-1.5 text-xs font-mono text-muted-foreground">
+                    <Clock className="h-3 w-3" />
+                    <span>Times shown in <span className="text-blue-400">{tzLabel}</span></span>
+                    {timezone === "local" && <span className="text-[10px]">({localName})</span>}
+                  </div>
+                </div>
+              </CardHeader>
               <CardContent>
                 <div className="flex flex-col sm:flex-row gap-3">
                   <div className="flex-1">
-                    <label className="text-xs font-mono text-muted-foreground block mb-1.5">startDate (ISO 8601)</label>
+                    <label className="text-xs font-mono text-muted-foreground block mb-1.5">startDate ({tzLabel})</label>
                     <Input type="datetime-local" value={startDate} onChange={(e) => { setStartDate(e.target.value); setQueryEnabled(false); }} className="font-mono text-xs bg-input border-border" />
                   </div>
                   <div className="flex-1">
-                    <label className="text-xs font-mono text-muted-foreground block mb-1.5">endDate (ISO 8601)</label>
+                    <label className="text-xs font-mono text-muted-foreground block mb-1.5">endDate ({tzLabel})</label>
                     <Input type="datetime-local" value={endDate} onChange={(e) => { setEndDate(e.target.value); setQueryEnabled(false); }} className="font-mono text-xs bg-input border-border" />
                   </div>
                   <div className="flex items-end">
@@ -389,13 +474,12 @@ export default function Home() {
                   </div>
                 </div>
                 <div className="mt-3 space-y-2">
-                  {startDate && endDate && (() => {
-                    const diff = (new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24);
-                    const isOver = diff > 30;
+                  {rangeDays !== null && (() => {
+                    const isOver = rangeDays > 30;
                     return (
                       <div className={"px-3 py-2 rounded-md border " + (isOver ? "bg-destructive/10 border-destructive/30" : "bg-secondary/30 border-border")}>
                         <span className={"text-xs font-mono " + (isOver ? "text-destructive" : "text-muted-foreground")}>
-                          Selected range: <span className={isOver ? "text-destructive font-medium" : "text-foreground"}>{diff.toFixed(1)} days</span>
+                          Selected range: <span className={isOver ? "text-destructive font-medium" : "text-foreground"}>{rangeDays.toFixed(1)} days</span>
                           {isOver && " (max 30 days)"}
                         </span>
                       </div>
@@ -403,7 +487,12 @@ export default function Home() {
                   })()}
                   {dataRange.data?.egvs && (
                     <div className="px-3 py-2 rounded-md bg-secondary/30 border border-border">
-                      <span className="text-xs font-mono text-muted-foreground">Available range: <span className="text-foreground">{new Date(dataRange.data.egvs.start.systemTime).toLocaleDateString()}</span> {"\u2192"} <span className="text-foreground">{new Date(dataRange.data.egvs.end.systemTime).toLocaleDateString()}</span> <span className="text-muted-foreground">(max 30-day window per query)</span></span>
+                      <span className="text-xs font-mono text-muted-foreground">
+                        Available range: <span className="text-foreground">{formatDate(dataRange.data.egvs.start.systemTime, timezone)}</span>
+                        {" \u2192 "}
+                        <span className="text-foreground">{formatDate(dataRange.data.egvs.end.systemTime, timezone)}</span>
+                        {" "}<span className="text-muted-foreground">(max 30-day window per query)</span>
+                      </span>
                     </div>
                   )}
                 </div>
@@ -416,9 +505,9 @@ export default function Home() {
 
             {egvQuery.data?.records && egvQuery.data.records.length > 0 && (
               <Card className="bg-card border-border">
-                <CardHeader><CardTitle className="text-base">Glucose Timeline</CardTitle></CardHeader>
+                <CardHeader><CardTitle className="text-base">Glucose Timeline <span className="text-xs font-mono text-muted-foreground ml-2">({tzLabel})</span></CardTitle></CardHeader>
                 <CardContent>
-                  <EgvChart records={egvQuery.data.records} />
+                  <EgvChart records={egvQuery.data.records} timezone={timezone} />
                   <div className="flex items-center gap-4 mt-4 text-xs font-mono text-muted-foreground">
                     <div className="flex items-center gap-1.5"><div className="w-3 h-0.5 bg-[oklch(0.75_0.15_60)]" /><span>70 / 180 mg/dL thresholds</span></div>
                     <div className="flex items-center gap-1.5"><div className="w-3 h-3 bg-[oklch(0.72_0.15_145)] opacity-10 rounded-sm" /><span>Target range</span></div>

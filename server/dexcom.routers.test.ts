@@ -102,8 +102,8 @@ describe("dexcom routers", () => {
   });
 
   it("dexcom.egvs accepts production env parameter", async () => {
-    const caller = appRouter.createCaller(createAuthContext());
-    // Should fail with "Not connected" since no production tokens exist, but env should be accepted
+    const caller = appRouter.createCaller(createAuthContext(88888));
+    // Should fail with "Not connected" since no production tokens exist for this user
     await expect(
       caller.dexcom.egvs({
         startDate: "2024-01-01T00:00:00",
