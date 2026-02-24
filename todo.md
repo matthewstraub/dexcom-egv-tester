@@ -36,3 +36,4 @@
 - [x] Add TiDB Cloud setup documentation
 - [x] Create deployment README with environment variable guide
 - [x] Update tests for single-user mode
+- [x] Write comprehensive documentation (architecture, services, maintenance)
