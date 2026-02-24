@@ -14,10 +14,11 @@ import {
   inputToApiDate, apiDateToInput,
 } from "@/lib/timezone";
 import {
-  Activity, CheckCircle2, Circle, Clock, ExternalLink, Loader2, LogOut,
-  Plug, PlugZap, Terminal, Unplug, XCircle, Globe, FlaskConical,
+  Activity, CheckCircle2, Circle, Clock, Download, ExternalLink, FileJson, FileSpreadsheet,
+  Image, Loader2, LogOut, Plug, PlugZap, Terminal, Unplug, XCircle, Globe, FlaskConical,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { exportCsv, exportJson, exportChartPng } from "@/lib/export";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { DexcomEnv, TimezoneMode } from "../../../shared/const";
 import { DEXCOM_BASE_URLS } from "../../../shared/const";
@@ -128,6 +129,7 @@ function TimezoneToggle({ timezone, onChange }: { timezone: TimezoneMode; onChan
 
 export default function Home() {
   const { user, loading, isAuthenticated, logout } = useAuth();
+  const chartRef = useRef<HTMLDivElement>(null);
   const [activeTab, setActiveTab] = useState("connect");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
@@ -247,6 +249,24 @@ export default function Home() {
     const diffDays = (end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24);
     if (diffDays > 30) { toast.error(`Date range is ${diffDays.toFixed(1)} days. Dexcom API maximum is 30 days.`); return; }
     setQueryEnabled(true);
+  };
+
+  const handleExportCsv = () => {
+    if (!egvQuery.data?.records?.length) { toast.error("No data to export"); return; }
+    exportCsv(egvQuery.data.records, timezone, dexcomEnv, apiStartDate, apiEndDate);
+    toast.success("CSV exported successfully");
+  };
+
+  const handleExportJson = () => {
+    if (!egvQuery.data) { toast.error("No data to export"); return; }
+    exportJson(egvQuery.data, dexcomEnv);
+    toast.success("JSON exported successfully");
+  };
+
+  const handleExportChart = async () => {
+    const success = await exportChartPng(chartRef.current, dexcomEnv);
+    if (success) toast.success("Chart exported as PNG");
+    else toast.error("Failed to export chart");
   };
 
   const recordCount = egvQuery.data?.records?.length ?? 0;
@@ -450,10 +470,25 @@ export default function Home() {
                     <Activity className="h-4 w-4 text-primary" />EGV Query
                     {recordCount > 0 && <Badge variant="secondary" className="font-mono text-xs ml-2">{recordCount} records</Badge>}
                   </CardTitle>
-                  <div className="flex items-center gap-1.5 text-xs font-mono text-muted-foreground">
-                    <Clock className="h-3 w-3" />
-                    <span>Times shown in <span className="text-blue-400">{tzLabel}</span></span>
-                    {timezone === "local" && <span className="text-[10px]">({localName})</span>}
+                  <div className="flex items-center gap-3">
+                    {recordCount > 0 && (
+                      <div className="flex items-center gap-1">
+                        <Button variant="outline" size="sm" onClick={handleExportCsv} className="h-7 px-2 text-xs font-mono gap-1.5">
+                          <FileSpreadsheet className="h-3 w-3" />CSV
+                        </Button>
+                        <Button variant="outline" size="sm" onClick={handleExportJson} className="h-7 px-2 text-xs font-mono gap-1.5">
+                          <FileJson className="h-3 w-3" />JSON
+                        </Button>
+                        <Button variant="outline" size="sm" onClick={handleExportChart} className="h-7 px-2 text-xs font-mono gap-1.5">
+                          <Image className="h-3 w-3" />PNG
+                        </Button>
+                      </div>
+                    )}
+                    <div className="flex items-center gap-1.5 text-xs font-mono text-muted-foreground">
+                      <Clock className="h-3 w-3" />
+                      <span>Times shown in <span className="text-blue-400">{tzLabel}</span></span>
+                      {timezone === "local" && <span className="text-[10px]">({localName})</span>}
+                    </div>
                   </div>
                 </div>
               </CardHeader>
@@ -507,7 +542,7 @@ export default function Home() {
               <Card className="bg-card border-border">
                 <CardHeader><CardTitle className="text-base">Glucose Timeline <span className="text-xs font-mono text-muted-foreground ml-2">({tzLabel})</span></CardTitle></CardHeader>
                 <CardContent>
-                  <EgvChart records={egvQuery.data.records} timezone={timezone} />
+                  <EgvChart ref={chartRef} records={egvQuery.data.records} timezone={timezone} />
                   <div className="flex items-center gap-4 mt-4 text-xs font-mono text-muted-foreground">
                     <div className="flex items-center gap-1.5"><div className="w-3 h-0.5 bg-[oklch(0.75_0.15_60)]" /><span>70 / 180 mg/dL thresholds</span></div>
                     <div className="flex items-center gap-1.5"><div className="w-3 h-3 bg-[oklch(0.72_0.15_145)] opacity-10 rounded-sm" /><span>Target range</span></div>

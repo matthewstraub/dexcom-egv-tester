@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, forwardRef } from "react";
 import {
   LineChart,
   Line,
@@ -54,7 +54,7 @@ function getGlucoseColor(value: number | null): string {
   return "oklch(0.65 0.25 25)"; // very high - red
 }
 
-export function EgvChart({ records, timezone }: EgvChartProps) {
+export const EgvChart = forwardRef<HTMLDivElement, EgvChartProps>(function EgvChart({ records, timezone }, ref) {
   const chartData = useMemo(() => {
     return records
       .filter(r => r.value !== null)
@@ -78,7 +78,7 @@ export function EgvChart({ records, timezone }: EgvChartProps) {
   }
 
   return (
-    <div className="w-full h-80">
+    <div className="w-full h-80" ref={ref}>
       <ResponsiveContainer width="100%" height="100%">
         <LineChart data={chartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
           <CartesianGrid
@@ -176,4 +176,4 @@ export function EgvChart({ records, timezone }: EgvChartProps) {
       </ResponsiveContainer>
     </div>
   );
-}
+});

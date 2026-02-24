@@ -23,3 +23,7 @@
 - [x] Update chart X-axis and tooltips to respect timezone selection
 - [x] Update data table times to respect timezone selection
 - [x] Convert local time inputs to UTC before sending to Dexcom API
+- [x] Add CSV export for EGV data
+- [x] Add JSON export for raw API response
+- [x] Add PNG export for the glucose chart
+- [x] Add export buttons to the EGV Data tab UI
