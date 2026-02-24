@@ -1,11 +1,9 @@
-import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { getLoginUrl } from "@/const";
 import { trpc } from "@/lib/trpc";
 import { EgvChart } from "@/components/EgvChart";
 import { JsonViewer } from "@/components/JsonViewer";
@@ -15,7 +13,7 @@ import {
 } from "@/lib/timezone";
 import {
   Activity, CheckCircle2, Circle, Clock, Download, ExternalLink, FileJson, FileSpreadsheet,
-  Image, Loader2, LogOut, Plug, PlugZap, Terminal, Unplug, XCircle, Globe, FlaskConical,
+  Image, Loader2, Plug, PlugZap, Terminal, Unplug, XCircle, Globe, FlaskConical,
 } from "lucide-react";
 import { exportCsv, exportJson, exportChartPng } from "@/lib/export";
 import { useEffect, useRef, useState } from "react";
@@ -128,7 +126,6 @@ function TimezoneToggle({ timezone, onChange }: { timezone: TimezoneMode; onChan
 }
 
 export default function Home() {
-  const { user, loading, isAuthenticated, logout } = useAuth();
   const chartRef = useRef<HTMLDivElement>(null);
   const [activeTab, setActiveTab] = useState("connect");
   const [startDate, setStartDate] = useState("");
@@ -143,13 +140,13 @@ export default function Home() {
 
   const dexcomStatus = trpc.dexcom.status.useQuery(
     { env: dexcomEnv },
-    { enabled: isAuthenticated, refetchOnWindowFocus: false }
+    { refetchOnWindowFocus: false }
   );
 
   const dataRange = trpc.dexcom.dataRange.useQuery(
     { env: dexcomEnv },
     {
-      enabled: isAuthenticated && dexcomStatus.data?.connected === true,
+      enabled: dexcomStatus.data?.connected === true,
       refetchOnWindowFocus: false,
       retry: false,
     }
@@ -179,7 +176,6 @@ export default function Home() {
   // Handle timezone change: convert existing dates to the new timezone display
   const handleTimezoneChange = (newTz: TimezoneMode) => {
     if (startDate) {
-      // Convert current input value to UTC, then to the new timezone's input format
       const utcStart = inputToApiDate(startDate, timezone);
       setStartDate(apiDateToInput(utcStart, newTz));
     }
@@ -216,7 +212,6 @@ export default function Home() {
       if (egvRange.start?.systemTime && egvRange.end?.systemTime) {
         const endTime = new Date(egvRange.end.systemTime);
         const startTime = new Date(endTime.getTime() - 3 * 60 * 60 * 1000);
-        // Convert UTC API dates to the current timezone mode for display in inputs
         setStartDate(apiDateToInput(startTime.toISOString(), timezone));
         setEndDate(apiDateToInput(endTime.toISOString(), timezone));
       }
@@ -239,7 +234,6 @@ export default function Home() {
 
   const handleFetchEgvs = () => {
     if (!startDate || !endDate) { toast.error("Please enter both start and end dates"); return; }
-    // Convert to UTC for validation
     const utcStart = inputToApiDate(startDate, timezone);
     const utcEnd = inputToApiDate(endDate, timezone);
     const start = new Date(utcStart);
@@ -272,36 +266,6 @@ export default function Home() {
   const recordCount = egvQuery.data?.records?.length ?? 0;
   const baseUrl = DEXCOM_BASE_URLS[dexcomEnv];
   const isProduction = dexcomEnv === "production";
-
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <div className="flex flex-col items-center gap-4">
-          <Loader2 className="h-8 w-8 animate-spin text-primary" />
-          <span className="font-mono text-sm text-muted-foreground">Initializing...</span>
-        </div>
-      </div>
-    );
-  }
-
-  if (!isAuthenticated) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <Card className="w-full max-w-md bg-card border-border">
-          <CardHeader className="text-center space-y-4">
-            <div className="mx-auto w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center">
-              <Terminal className="h-6 w-6 text-primary" />
-            </div>
-            <CardTitle className="text-xl font-semibold">Dexcom EGV Tester</CardTitle>
-            <p className="text-sm text-muted-foreground">Sign in to test the Dexcom API and explore EGV data</p>
-          </CardHeader>
-          <CardContent>
-            <Button onClick={() => (window.location.href = getLoginUrl())} className="w-full" size="lg">Sign In to Continue</Button>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
 
   // Calculate range days for display
   const rangeDays = startDate && endDate
@@ -337,11 +301,6 @@ export default function Home() {
               ) : (
                 <><Circle className="h-2 w-2 fill-muted-foreground text-muted-foreground" /><span className="text-xs font-mono text-muted-foreground">Disconnected</span></>
               )}
-            </div>
-            <Separator orientation="vertical" className="h-6" />
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-muted-foreground">{user?.name}</span>
-              <Button variant="ghost" size="sm" onClick={logout} className="h-8 w-8 p-0"><LogOut className="h-3.5 w-3.5" /></Button>
             </div>
           </div>
         </div>

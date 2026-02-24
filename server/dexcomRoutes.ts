@@ -1,7 +1,11 @@
 import type { Express, Request, Response } from "express";
 import { exchangeCodeForTokens, getDexcomAuthUrl, saveDexcomTokens } from "./dexcom";
-import { sdk } from "./_core/sdk";
 import type { DexcomEnv } from "@shared/const";
+
+/**
+ * Single-user mode: all Dexcom tokens are stored under this fixed user ID.
+ */
+const SINGLE_USER_ID = 1;
 
 /**
  * Extract a human-readable error message from a Dexcom API error response.
@@ -37,6 +41,8 @@ function extractDexcomError(err: any): string {
  * Register Dexcom OAuth routes on the Express app.
  * These are standard Express routes (not tRPC) because the Dexcom OAuth
  * redirect callback needs to be a plain GET endpoint.
+ *
+ * Single-user mode: no authentication required.
  */
 export function registerDexcomRoutes(app: Express) {
   /**
@@ -74,6 +80,7 @@ export function registerDexcomRoutes(app: Express) {
    * GET /api/dexcom/callback
    * Handles the OAuth callback from Dexcom.
    * Exchanges the authorization code for tokens and stores them.
+   * No authentication required — single-user mode.
    */
   app.get("/api/dexcom/callback", async (req: Request, res: Response) => {
     try {
@@ -104,15 +111,6 @@ export function registerDexcomRoutes(app: Express) {
         return;
       }
 
-      // Verify the user is authenticated via Manus session
-      let user;
-      try {
-        user = await sdk.authenticateRequest(req);
-      } catch {
-        res.redirect(`${redirectBase}/?dexcom_error=not_authenticated&env=${env}`);
-        return;
-      }
-
       const redirectUri = origin
         ? `${origin}/api/dexcom/callback`
         : `${req.protocol}://${req.get("host")}/api/dexcom/callback`;
@@ -120,9 +118,9 @@ export function registerDexcomRoutes(app: Express) {
       // Exchange code for tokens
       const tokens = await exchangeCodeForTokens(code, redirectUri, env);
 
-      // Save tokens to database with environment
+      // Save tokens to database under the single-user ID
       await saveDexcomTokens(
-        user.id,
+        SINGLE_USER_ID,
         tokens.access_token,
         tokens.refresh_token,
         tokens.expires_in,

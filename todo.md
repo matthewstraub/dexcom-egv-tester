@@ -27,3 +27,12 @@
 - [x] Add JSON export for raw API response
 - [x] Add PNG export for the glucose chart
 - [x] Add export buttons to the EGV Data tab UI
+- [x] Refactor to single-user mode (remove Manus auth requirement)
+- [x] Remove Manus OAuth dependencies from backend
+- [x] Update dexcom_tokens table to use single-user key instead of userId
+- [x] Remove login/logout UI from frontend
+- [x] Remove Manus-specific environment variables from code
+- [x] Add Render deployment config (render.yaml or Dockerfile)
+- [x] Add TiDB Cloud setup documentation
+- [x] Create deployment README with environment variable guide
+- [x] Update tests for single-user mode

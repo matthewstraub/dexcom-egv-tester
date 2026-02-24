@@ -2,7 +2,7 @@ import { COOKIE_NAME, type DexcomEnv } from "@shared/const";
 import { z } from "zod";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
-import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
+import { publicProcedure, router } from "./_core/trpc";
 import {
   getDexcomConnectionStatus,
   getValidAccessToken,
@@ -13,10 +13,16 @@ import {
 
 const dexcomEnvSchema = z.enum(["sandbox", "production"]);
 
+/**
+ * Single-user mode: all Dexcom tokens are stored under this fixed user ID.
+ * No authentication is required — the app is publicly accessible.
+ */
+const SINGLE_USER_ID = 1;
+
 export const appRouter = router({
   system: systemRouter,
   auth: router({
-    me: publicProcedure.query(opts => opts.ctx.user),
+    me: publicProcedure.query(() => null),
     logout: publicProcedure.mutation(({ ctx }) => {
       const cookieOptions = getSessionCookieOptions(ctx.req);
       ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
@@ -26,28 +32,28 @@ export const appRouter = router({
 
   dexcom: router({
     /** Get the current Dexcom connection status for a given environment */
-    status: protectedProcedure
+    status: publicProcedure
       .input(z.object({ env: dexcomEnvSchema }).optional())
-      .query(async ({ ctx, input }) => {
+      .query(async ({ input }) => {
         const env: DexcomEnv = input?.env ?? "sandbox";
-        return getDexcomConnectionStatus(ctx.user.id, env);
+        return getDexcomConnectionStatus(SINGLE_USER_ID, env);
       }),
 
     /** Disconnect from Dexcom (remove stored tokens) for a given environment */
-    disconnect: protectedProcedure
+    disconnect: publicProcedure
       .input(z.object({ env: dexcomEnvSchema }).optional())
-      .mutation(async ({ ctx, input }) => {
+      .mutation(async ({ input }) => {
         const env: DexcomEnv = input?.env ?? "sandbox";
-        await disconnectDexcom(ctx.user.id, env);
+        await disconnectDexcom(SINGLE_USER_ID, env);
         return { success: true };
       }),
 
     /** Fetch the available data range for the connected Dexcom user */
-    dataRange: protectedProcedure
+    dataRange: publicProcedure
       .input(z.object({ env: dexcomEnvSchema }).optional())
-      .query(async ({ ctx, input }) => {
+      .query(async ({ input }) => {
         const env: DexcomEnv = input?.env ?? "sandbox";
-        const accessToken = await getValidAccessToken(ctx.user.id, env);
+        const accessToken = await getValidAccessToken(SINGLE_USER_ID, env);
         if (!accessToken) {
           throw new Error("Not connected to Dexcom. Please authorize first.");
         }
@@ -62,7 +68,7 @@ export const appRouter = router({
       }),
 
     /** Fetch EGV data for a given date range */
-    egvs: protectedProcedure
+    egvs: publicProcedure
       .input(
         z.object({
           startDate: z.string(),
@@ -70,7 +76,7 @@ export const appRouter = router({
           env: dexcomEnvSchema.optional(),
         })
       )
-      .query(async ({ ctx, input }) => {
+      .query(async ({ input }) => {
         const env: DexcomEnv = input.env ?? "sandbox";
 
         // Validate date range (Dexcom API max 30 days)
@@ -90,7 +96,7 @@ export const appRouter = router({
           );
         }
 
-        const accessToken = await getValidAccessToken(ctx.user.id, env);
+        const accessToken = await getValidAccessToken(SINGLE_USER_ID, env);
         if (!accessToken) {
           throw new Error("Not connected to Dexcom. Please authorize first.");
         }
