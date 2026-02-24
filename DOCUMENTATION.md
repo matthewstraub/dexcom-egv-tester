@@ -20,25 +20,25 @@ The application follows a standard three-tier architecture with a React frontend
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                     Browser (Client)                     │
+│                     Browser (Client)                    │
 │  React 19 + Tailwind CSS 4 + Recharts + tRPC Client     │
 └──────────────────────┬──────────────────────────────────┘
                        │  HTTP (tRPC over /api/trpc)
                        │  Express routes (/api/dexcom/*)
                        ▼
 ┌─────────────────────────────────────────────────────────┐
-│                  Node.js Server (Backend)                 │
+│                  Node.js Server (Backend)               │
 │  Express 4 + tRPC 11 + Axios + Drizzle ORM              │
-│                                                          │
+│                                                         │
 │  ┌─────────────┐  ┌──────────────┐  ┌────────────────┐  │
 │  │ tRPC Router │  │ Dexcom OAuth │  │ Dexcom API     │  │
 │  │ (procedures)│  │ (Express)    │  │ (proxy calls)  │  │
-│  └──────┬──────┘  └──────┬───────┘  └───────┬────────┘  │
-│         │                │                   │           │
-│         ▼                ▼                   ▼           │
+│  └──────┬──────┘  └──────┬───────┘  └────────┬───────┘  │
+│         │                │                   │          │
+│         ▼                ▼                   ▼          │
 │  ┌──────────────────────────────────────────────────┐   │
-│  │           Dexcom Service Layer (dexcom.ts)        │   │
-│  │  Token management, API calls, token refresh       │   │
+│  │           Dexcom Service Layer (dexcom.ts)       │   │
+│  │  Token management, API calls, token refresh      │   │
 │  └──────────────────────┬───────────────────────────┘   │
 └─────────────────────────┼───────────────────────────────┘
                           │
