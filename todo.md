@@ -74,3 +74,6 @@
 - [x] Update Correlations page to use Web Worker instead of server upload
 - [x] Simplify server: replace file upload with tRPC saveResults mutation
 - [x] Remove server-side file upload route and processor (appleHealthRoutes.ts, appleHealthProcessor.ts)
+- [x] Fix "Invalid string length" error: use native DecompressionStream + ZIP central directory parsing
+- [x] Implement chunked streaming in Web Worker using DecompressionStream("deflate-raw")
+- [x] Test with real 102MB Apple Health export (2.1GB XML) — 32s, 169MB peak, 3.6M data points, 7 metrics
