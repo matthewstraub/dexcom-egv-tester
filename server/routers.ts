@@ -126,22 +126,22 @@ export const appRouter = router({
   appleHealth: router({
     /** Get the status of the latest Apple Health upload */
     status: publicProcedure.query(() => {
-      const { parseResult, uploadedAt } = getLatestHealthData();
-      if (!parseResult || !uploadedAt) {
+      const { summary, uploadedAt } = getLatestHealthData();
+      if (!summary || !uploadedAt) {
         return { uploaded: false as const };
       }
       return {
         uploaded: true as const,
         uploadedAt,
         summary: {
-          totalRecordsScanned: parseResult.recordCount,
-          relevantDataPoints: parseResult.dataPoints.length,
-          workoutCount: parseResult.workouts.length,
-          metricsFound: parseResult.metricsFound,
-          dateRange: parseResult.dateRange
+          totalRecordsScanned: summary.recordCount,
+          relevantDataPoints: summary.relevantDataPoints,
+          workoutCount: summary.workouts.length,
+          metricsFound: summary.metricsFound,
+          dateRange: summary.dateRange
             ? {
-                start: parseResult.dateRange.start.toISOString(),
-                end: parseResult.dateRange.end.toISOString(),
+                start: summary.dateRange.start.toISOString(),
+                end: summary.dateRange.end.toISOString(),
               }
             : null,
         },
@@ -156,9 +156,9 @@ export const appRouter = router({
 
     /** Get workout records */
     workouts: publicProcedure.query(() => {
-      const { parseResult } = getLatestHealthData();
-      if (!parseResult) return [];
-      return parseResult.workouts.map((w) => ({
+      const { summary } = getLatestHealthData();
+      if (!summary) return [];
+      return summary.workouts.map((w: typeof summary.workouts[number]) => ({
         ...w,
         startDate: w.startDate.toISOString(),
         endDate: w.endDate.toISOString(),

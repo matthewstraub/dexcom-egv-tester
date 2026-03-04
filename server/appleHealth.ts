@@ -1,10 +1,15 @@
 import sax from "sax";
-import AdmZip from "adm-zip";
 import { Readable } from "stream";
 import { APPLE_HEALTH_METRICS, type AppleHealthMetricKey } from "@shared/const";
+import yauzl from "yauzl";
+import fs from "fs";
+import path from "path";
+import os from "os";
 
 /**
  * A single parsed health data point.
+ * Only used in tests and for the public interface — during streaming parse,
+ * we aggregate on-the-fly to avoid accumulating millions of objects.
  */
 export interface HealthDataPoint {
   metric: AppleHealthMetricKey;
@@ -32,7 +37,19 @@ export interface WorkoutRecord {
 }
 
 /**
- * Aggregated health data for a time bucket (e.g., 15-minute or 1-hour window).
+ * Running statistics accumulator for a single metric in a bucket.
+ * Uses Welford's online algorithm to avoid storing all values.
+ */
+interface RunningStats {
+  count: number;
+  sum: number;
+  min: number;
+  max: number;
+  // For computing average: sum / count
+}
+
+/**
+ * Aggregated health data for a time bucket (e.g., 15-minute window).
  */
 export interface AggregatedBucket {
   bucketStart: string; // ISO string
@@ -41,13 +58,13 @@ export interface AggregatedBucket {
 }
 
 /**
- * Full parsed result from an Apple Health export.
+ * Lightweight summary of a parse (no raw data points stored).
  */
-export interface AppleHealthParseResult {
-  dataPoints: HealthDataPoint[];
+export interface AppleHealthParseSummary {
   workouts: WorkoutRecord[];
   dateRange: { start: Date; end: Date } | null;
   recordCount: number;
+  relevantDataPoints: number;
   metricsFound: AppleHealthMetricKey[];
 }
 
@@ -84,54 +101,76 @@ const WORKOUT_TYPE_LABELS: Record<string, string> = {
  */
 function parseAppleHealthDate(dateStr: string): Date {
   if (!dateStr) return new Date(NaN);
-  // Format: "2024-01-15 09:30:00 -0500" or "2024-01-15 09:30:00 +0000"
   const match = dateStr.match(
     /^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})\s+([+-]\d{4})$/
   );
   if (!match) {
-    // Try ISO format fallback
     return new Date(dateStr);
   }
   const [, year, month, day, hour, min, sec, tz] = match;
-  // Convert to ISO format: 2024-01-15T09:30:00-05:00
   const tzFormatted = tz.slice(0, 3) + ":" + tz.slice(3);
   return new Date(`${year}-${month}-${day}T${hour}:${min}:${sec}${tzFormatted}`);
 }
 
 /**
- * Extract the XML content from an Apple Health export ZIP file.
- * Returns a Buffer of the export.xml content.
+ * Extract export.xml from a ZIP file on disk using yauzl (streaming, low memory).
+ * Returns a readable stream of the XML content.
  */
-export function extractXmlFromZip(zipBuffer: Buffer): Buffer {
-  const zip = new AdmZip(zipBuffer);
-  const entries = zip.getEntries();
+export function streamXmlFromZip(zipPath: string): Promise<NodeJS.ReadableStream> {
+  return new Promise((resolve, reject) => {
+    yauzl.open(zipPath, { lazyEntries: true, autoClose: true }, (err, zipfile) => {
+      if (err || !zipfile) {
+        reject(err || new Error("Failed to open ZIP file"));
+        return;
+      }
 
-  // Look for export.xml (may be in apple_health_export/ directory)
-  const xmlEntry = entries.find(
-    (e) =>
-      e.entryName === "export.xml" ||
-      e.entryName === "apple_health_export/export.xml" ||
-      e.entryName.endsWith("/export.xml")
-  );
+      zipfile.readEntry();
 
-  if (!xmlEntry) {
-    throw new Error(
-      "Could not find export.xml in the ZIP file. Please ensure this is an Apple Health export."
-    );
-  }
+      zipfile.on("entry", (entry) => {
+        const name = entry.fileName;
+        if (
+          name === "export.xml" ||
+          name === "apple_health_export/export.xml" ||
+          name.endsWith("/export.xml")
+        ) {
+          zipfile.openReadStream(entry, (err2, readStream) => {
+            if (err2 || !readStream) {
+              reject(err2 || new Error("Failed to read export.xml from ZIP"));
+              return;
+            }
+            resolve(readStream);
+          });
+        } else {
+          zipfile.readEntry();
+        }
+      });
 
-  return xmlEntry.getData();
+      zipfile.on("end", () => {
+        reject(new Error("Could not find export.xml in the ZIP file. Please ensure this is an Apple Health export."));
+      });
+
+      zipfile.on("error", reject);
+    });
+  });
 }
 
 /**
- * Parse Apple Health XML using a streaming SAX parser.
- * Filters records to only the metrics we care about, within an optional date range.
+ * Stream-parse Apple Health XML with on-the-fly aggregation.
+ * Instead of accumulating all data points in memory, we aggregate directly
+ * into time buckets during parsing. This keeps memory usage constant
+ * regardless of file size.
+ *
+ * @param xmlStream - Readable stream of XML content
+ * @param bucketMinutes - Aggregation bucket size in minutes (default 15)
+ * @param filterStartDate - Optional start date filter
+ * @param filterEndDate - Optional end date filter
  */
-export function parseAppleHealthXml(
-  xmlBuffer: Buffer,
+export function streamParseAndAggregate(
+  xmlStream: NodeJS.ReadableStream,
+  bucketMinutes: number = 15,
   filterStartDate?: Date,
   filterEndDate?: Date
-): Promise<AppleHealthParseResult> {
+): Promise<{ summary: AppleHealthParseSummary; buckets: AggregatedBucket[] }> {
   return new Promise((resolve, reject) => {
     const parser = sax.createStream(false, {
       trim: true,
@@ -139,11 +178,16 @@ export function parseAppleHealthXml(
       lowercase: true,
     });
 
-    const dataPoints: HealthDataPoint[] = [];
+    const bucketMs = bucketMinutes * 60 * 1000;
+
+    // On-the-fly bucket aggregation — Map<bucketKey, Map<metric, RunningStats>>
+    const bucketMap = new Map<number, Map<AppleHealthMetricKey, RunningStats>>();
+
     const workouts: WorkoutRecord[] = [];
     let minDate: Date | null = null;
     let maxDate: Date | null = null;
     let totalRecords = 0;
+    let relevantDataPoints = 0;
     const metricsSet = new Set<AppleHealthMetricKey>();
 
     parser.on("opentag", (node: sax.Tag) => {
@@ -154,38 +198,47 @@ export function parseAppleHealthXml(
         const type = node.attributes.type || node.attributes.TYPE;
         const metricKey = HK_TYPE_TO_METRIC[type as string];
 
-        if (!metricKey) return; // Skip types we don't care about
+        if (!metricKey) return;
 
         const startDateStr = (node.attributes.startdate || node.attributes.STARTDATE || "") as string;
         const endDateStr = (node.attributes.enddate || node.attributes.ENDDATE || "") as string;
         const valueStr = (node.attributes.value || node.attributes.VALUE || "") as string;
-        const unit = (node.attributes.unit || node.attributes.UNIT || "") as string;
-        const sourceName = (node.attributes.sourcename || node.attributes.SOURCENAME || "") as string;
 
         const startDate = parseAppleHealthDate(startDateStr);
-        const endDate = parseAppleHealthDate(endDateStr);
         const value = parseFloat(valueStr);
 
         if (isNaN(startDate.getTime()) || isNaN(value)) return;
 
-        // Apply date filter if provided
+        // Apply date filter
         if (filterStartDate && startDate < filterStartDate) return;
-        if (filterEndDate && endDate > filterEndDate) return;
+        if (filterEndDate) {
+          const endDate = parseAppleHealthDate(endDateStr);
+          if (!isNaN(endDate.getTime()) && endDate > filterEndDate) return;
+        }
 
         // Track date range
         if (!minDate || startDate < minDate) minDate = startDate;
-        if (!maxDate || endDate > maxDate) maxDate = endDate;
+        const endDate = parseAppleHealthDate(endDateStr);
+        const effectiveEnd = !isNaN(endDate.getTime()) ? endDate : startDate;
+        if (!maxDate || effectiveEnd > maxDate) maxDate = effectiveEnd;
 
         metricsSet.add(metricKey);
+        relevantDataPoints++;
 
-        dataPoints.push({
-          metric: metricKey,
-          value,
-          unit,
-          startDate,
-          endDate,
-          sourceName,
-        });
+        // Aggregate directly into bucket
+        const bucketKey = Math.floor(startDate.getTime() / bucketMs) * bucketMs;
+        if (!bucketMap.has(bucketKey)) {
+          bucketMap.set(bucketKey, new Map());
+        }
+        const metrics = bucketMap.get(bucketKey)!;
+        if (!metrics.has(metricKey)) {
+          metrics.set(metricKey, { count: 0, sum: 0, min: Infinity, max: -Infinity });
+        }
+        const stats = metrics.get(metricKey)!;
+        stats.count++;
+        stats.sum += value;
+        if (value < stats.min) stats.min = value;
+        if (value > stats.max) stats.max = value;
       }
 
       if (tagName === "workout") {
@@ -204,7 +257,6 @@ export function parseAppleHealthXml(
 
         if (isNaN(startDate.getTime())) return;
 
-        // Apply date filter
         if (filterStartDate && startDate < filterStartDate) return;
         if (filterEndDate && endDate > filterEndDate) return;
 
@@ -224,26 +276,91 @@ export function parseAppleHealthXml(
     });
 
     parser.on("error", (err) => {
-      // SAX parser is lenient — log and continue
       console.warn("[AppleHealth] SAX parse warning:", err.message);
       (parser as any).resume();
     });
 
     parser.on("end", () => {
+      // Convert bucket map to sorted array
+      const sortedKeys = Array.from(bucketMap.keys()).sort((a, b) => a - b);
+      const buckets: AggregatedBucket[] = sortedKeys.map((key) => {
+        const metrics = bucketMap.get(key)!;
+        const bucket: AggregatedBucket = {
+          bucketStart: new Date(key).toISOString(),
+          bucketEnd: new Date(key + bucketMs).toISOString(),
+          metrics: {},
+        };
+        for (const [metric, stats] of Array.from(metrics.entries())) {
+          (bucket.metrics as any)[metric] = {
+            avg: stats.sum / stats.count,
+            min: stats.min,
+            max: stats.max,
+            sum: stats.sum,
+            count: stats.count,
+          };
+        }
+        return bucket;
+      });
+
+      // Free the bucket map
+      bucketMap.clear();
+
       resolve({
-        dataPoints,
-        workouts,
-        dateRange: minDate && maxDate ? { start: minDate, end: maxDate } : null,
-        recordCount: totalRecords,
-        metricsFound: Array.from(metricsSet),
+        summary: {
+          workouts,
+          dateRange: minDate && maxDate ? { start: minDate, end: maxDate } : null,
+          recordCount: totalRecords,
+          relevantDataPoints,
+          metricsFound: Array.from(metricsSet),
+        },
+        buckets,
       });
     });
 
-    // Stream the buffer through the parser
-    const readable = Readable.from(xmlBuffer);
-    readable.pipe(parser);
+    xmlStream.pipe(parser);
   });
 }
+
+/**
+ * Save an incoming request stream to a temporary file on disk.
+ * Returns the path to the temp file.
+ */
+export function saveStreamToTempFile(inputStream: NodeJS.ReadableStream): Promise<{ tempPath: string; size: number }> {
+  return new Promise((resolve, reject) => {
+    const tempPath = path.join(os.tmpdir(), `apple-health-${Date.now()}.zip`);
+    const writeStream = fs.createWriteStream(tempPath);
+    let size = 0;
+
+    inputStream.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+    });
+
+    inputStream.pipe(writeStream);
+
+    writeStream.on("finish", () => resolve({ tempPath, size }));
+    writeStream.on("error", (err) => {
+      // Clean up on error
+      fs.unlink(tempPath, () => {});
+      reject(err);
+    });
+    inputStream.on("error", (err) => {
+      writeStream.destroy();
+      fs.unlink(tempPath, () => {});
+      reject(err);
+    });
+  });
+}
+
+/**
+ * Clean up a temporary file.
+ */
+export function cleanupTempFile(tempPath: string): void {
+  fs.unlink(tempPath, (err) => {
+    if (err) console.warn("[AppleHealth] Failed to clean up temp file:", err.message);
+  });
+}
+
+// ── Legacy functions kept for backward compatibility with tests ──
 
 /**
  * Aggregate health data points into time buckets for chart overlay.
@@ -260,9 +377,7 @@ export function aggregateIntoBuckets(
   const bucketMap = new Map<number, Map<AppleHealthMetricKey, number[]>>();
 
   for (const dp of dataPoints) {
-    // Bucket by the start of the time window
     const bucketKey = Math.floor(dp.startDate.getTime() / bucketMs) * bucketMs;
-
     if (!bucketMap.has(bucketKey)) {
       bucketMap.set(bucketKey, new Map());
     }
@@ -273,7 +388,6 @@ export function aggregateIntoBuckets(
     metrics.get(dp.metric)!.push(dp.value);
   }
 
-  // Convert to sorted array
   const buckets: AggregatedBucket[] = [];
   const sortedKeys = Array.from(bucketMap.keys()).sort((a, b) => a - b);
 

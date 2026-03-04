@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { Readable } from "stream";
 import {
   aggregateIntoBuckets,
   pearsonCorrelation,
+  streamParseAndAggregate,
   type HealthDataPoint,
 } from "./appleHealth";
 import type { AppleHealthMetricKey } from "@shared/const";
@@ -24,7 +26,6 @@ describe("pearsonCorrelation", () => {
   });
 
   it("returns 0 for uncorrelated arrays", () => {
-    // Constant y means no correlation
     const x = [1, 2, 3, 4, 5];
     const y = [5, 5, 5, 5, 5];
     const r = pearsonCorrelation(x, y);
@@ -40,12 +41,10 @@ describe("pearsonCorrelation", () => {
     const x = [1, 2, 3, 4, 5, 6, 7];
     const y = [2, 4, 6];
     const r = pearsonCorrelation(x, y);
-    // Only first 3 elements used: [1,2,3] vs [2,4,6] → r = 1
     expect(r).toBeCloseTo(1, 5);
   });
 
   it("computes a moderate positive correlation", () => {
-    // Some noise in the data
     const x = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
     const y = [2, 3, 2, 5, 4, 7, 6, 9, 8, 10];
     const r = pearsonCorrelation(x, y);
@@ -54,7 +53,7 @@ describe("pearsonCorrelation", () => {
   });
 });
 
-// ── aggregateIntoBuckets ────────────────────────────────────────────
+// ── aggregateIntoBuckets (legacy, still used in tests) ──────────────
 
 describe("aggregateIntoBuckets", () => {
   it("returns empty array for empty input", () => {
@@ -77,7 +76,7 @@ describe("aggregateIntoBuckets", () => {
         metric: "heartRate" as AppleHealthMetricKey,
         value: 80,
         unit: "count/min",
-        startDate: new Date(baseTime.getTime() + 5 * 60000), // 5 min later, same bucket
+        startDate: new Date(baseTime.getTime() + 5 * 60000),
         endDate: new Date(baseTime.getTime() + 6 * 60000),
         sourceName: "Apple Watch",
       },
@@ -85,7 +84,7 @@ describe("aggregateIntoBuckets", () => {
         metric: "heartRate" as AppleHealthMetricKey,
         value: 90,
         unit: "count/min",
-        startDate: new Date(baseTime.getTime() + 20 * 60000), // 20 min later, next bucket
+        startDate: new Date(baseTime.getTime() + 20 * 60000),
         endDate: new Date(baseTime.getTime() + 21 * 60000),
         sourceName: "Apple Watch",
       },
@@ -95,7 +94,6 @@ describe("aggregateIntoBuckets", () => {
 
     expect(result).toHaveLength(2);
 
-    // First bucket: 10:00-10:15 with values 70, 80
     const firstBucket = result[0];
     expect(firstBucket.metrics.heartRate).toBeDefined();
     expect(firstBucket.metrics.heartRate!.avg).toBe(75);
@@ -104,7 +102,6 @@ describe("aggregateIntoBuckets", () => {
     expect(firstBucket.metrics.heartRate!.sum).toBe(150);
     expect(firstBucket.metrics.heartRate!.count).toBe(2);
 
-    // Second bucket: 10:15-10:30 with value 90
     const secondBucket = result[1];
     expect(secondBucket.metrics.heartRate).toBeDefined();
     expect(secondBucket.metrics.heartRate!.avg).toBe(90);
@@ -173,7 +170,6 @@ describe("aggregateIntoBuckets", () => {
     const baseTime = new Date("2024-01-15T10:00:00Z");
     const dataPoints: HealthDataPoint[] = [];
 
-    // Add data points every 10 minutes for 1 hour
     for (let i = 0; i < 6; i++) {
       dataPoints.push({
         metric: "heartRate" as AppleHealthMetricKey,
@@ -185,17 +181,158 @@ describe("aggregateIntoBuckets", () => {
       });
     }
 
-    // With 30-minute buckets, should get 2 buckets
     const result = aggregateIntoBuckets(dataPoints, 30);
     expect(result).toHaveLength(2);
-
-    // First bucket: 10:00-10:30 with 3 values (70, 71, 72)
     expect(result[0].metrics.heartRate!.count).toBe(3);
     expect(result[0].metrics.heartRate!.avg).toBeCloseTo(71, 1);
-
-    // Second bucket: 10:30-11:00 with 3 values (73, 74, 75)
     expect(result[1].metrics.heartRate!.count).toBe(3);
     expect(result[1].metrics.heartRate!.avg).toBeCloseTo(74, 1);
+  });
+});
+
+// ── streamParseAndAggregate ─────────────────────────────────────────
+
+describe("streamParseAndAggregate", () => {
+  function xmlStream(xml: string): NodeJS.ReadableStream {
+    return Readable.from(Buffer.from(xml));
+  }
+
+  it("parses health records from XML stream and aggregates into buckets", async () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<HealthData>
+  <Record type="HKQuantityTypeIdentifierHeartRate"
+    startDate="2024-01-15 10:00:00 +0000"
+    endDate="2024-01-15 10:01:00 +0000"
+    value="72" unit="count/min" sourceName="Apple Watch" />
+  <Record type="HKQuantityTypeIdentifierHeartRate"
+    startDate="2024-01-15 10:05:00 +0000"
+    endDate="2024-01-15 10:06:00 +0000"
+    value="78" unit="count/min" sourceName="Apple Watch" />
+  <Record type="HKQuantityTypeIdentifierStepCount"
+    startDate="2024-01-15 10:00:00 +0000"
+    endDate="2024-01-15 10:15:00 +0000"
+    value="200" unit="count" sourceName="iPhone" />
+</HealthData>`;
+
+    const { summary, buckets } = await streamParseAndAggregate(xmlStream(xml));
+
+    expect(summary.recordCount).toBe(3);
+    expect(summary.relevantDataPoints).toBe(3);
+    expect(summary.metricsFound).toContain("heartRate");
+    expect(summary.metricsFound).toContain("stepCount");
+    expect(summary.dateRange).not.toBeNull();
+
+    // All 3 records fall in the same 15-min bucket (10:00-10:15)
+    expect(buckets).toHaveLength(1);
+    expect(buckets[0].metrics.heartRate).toBeDefined();
+    expect(buckets[0].metrics.heartRate!.avg).toBe(75);
+    expect(buckets[0].metrics.heartRate!.count).toBe(2);
+    expect(buckets[0].metrics.stepCount).toBeDefined();
+    expect(buckets[0].metrics.stepCount!.sum).toBe(200);
+  });
+
+  it("parses workout records from XML stream", async () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<HealthData>
+  <Workout workoutActivityType="HKWorkoutActivityTypeRunning"
+    startDate="2024-01-15 08:00:00 +0000"
+    endDate="2024-01-15 08:30:00 +0000"
+    duration="30" totalDistance="3.1" totalDistanceUnit="mi"
+    totalEnergyBurned="250" totalEnergyBurnedUnit="kcal"
+    sourceName="Apple Watch" />
+</HealthData>`;
+
+    const { summary } = await streamParseAndAggregate(xmlStream(xml));
+
+    expect(summary.workouts).toHaveLength(1);
+    expect(summary.workouts[0].activityLabel).toBe("Running");
+    expect(summary.workouts[0].duration).toBe(30);
+    expect(summary.workouts[0].totalDistance).toBe(3.1);
+    expect(summary.workouts[0].totalEnergyBurned).toBe(250);
+  });
+
+  it("skips irrelevant record types", async () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<HealthData>
+  <Record type="HKQuantityTypeIdentifierBodyMass"
+    startDate="2024-01-15 10:00:00 +0000"
+    endDate="2024-01-15 10:00:00 +0000"
+    value="75" unit="kg" sourceName="iPhone" />
+  <Record type="HKQuantityTypeIdentifierHeartRate"
+    startDate="2024-01-15 10:00:00 +0000"
+    endDate="2024-01-15 10:01:00 +0000"
+    value="72" unit="count/min" sourceName="Apple Watch" />
+</HealthData>`;
+
+    const { summary } = await streamParseAndAggregate(xmlStream(xml));
+
+    // 2 total records scanned, but only 1 relevant
+    expect(summary.recordCount).toBe(2);
+    expect(summary.relevantDataPoints).toBe(1);
+    expect(summary.metricsFound).toEqual(["heartRate"]);
+  });
+
+  it("applies date filter", async () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<HealthData>
+  <Record type="HKQuantityTypeIdentifierHeartRate"
+    startDate="2024-01-14 10:00:00 +0000"
+    endDate="2024-01-14 10:01:00 +0000"
+    value="70" unit="count/min" sourceName="Apple Watch" />
+  <Record type="HKQuantityTypeIdentifierHeartRate"
+    startDate="2024-01-15 10:00:00 +0000"
+    endDate="2024-01-15 10:01:00 +0000"
+    value="80" unit="count/min" sourceName="Apple Watch" />
+</HealthData>`;
+
+    const filterStart = new Date("2024-01-15T00:00:00Z");
+    const { summary, buckets } = await streamParseAndAggregate(
+      xmlStream(xml),
+      15,
+      filterStart
+    );
+
+    // Only the Jan 15 record should pass the filter
+    expect(summary.relevantDataPoints).toBe(1);
+    expect(buckets).toHaveLength(1);
+    expect(buckets[0].metrics.heartRate!.avg).toBe(80);
+  });
+
+  it("returns empty results for empty XML", async () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?><HealthData></HealthData>`;
+    const { summary, buckets } = await streamParseAndAggregate(xmlStream(xml));
+
+    expect(summary.recordCount).toBe(0);
+    expect(summary.relevantDataPoints).toBe(0);
+    expect(summary.workouts).toHaveLength(0);
+    expect(summary.dateRange).toBeNull();
+    expect(buckets).toHaveLength(0);
+  });
+
+  it("uses custom bucket size", async () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<HealthData>
+  <Record type="HKQuantityTypeIdentifierHeartRate"
+    startDate="2024-01-15 10:00:00 +0000"
+    endDate="2024-01-15 10:01:00 +0000"
+    value="70" unit="count/min" sourceName="Apple Watch" />
+  <Record type="HKQuantityTypeIdentifierHeartRate"
+    startDate="2024-01-15 10:20:00 +0000"
+    endDate="2024-01-15 10:21:00 +0000"
+    value="80" unit="count/min" sourceName="Apple Watch" />
+  <Record type="HKQuantityTypeIdentifierHeartRate"
+    startDate="2024-01-15 10:40:00 +0000"
+    endDate="2024-01-15 10:41:00 +0000"
+    value="90" unit="count/min" sourceName="Apple Watch" />
+</HealthData>`;
+
+    // With 30-min buckets: first two in one bucket, third in another
+    const { buckets } = await streamParseAndAggregate(xmlStream(xml), 30);
+    expect(buckets).toHaveLength(2);
+    expect(buckets[0].metrics.heartRate!.count).toBe(2);
+    expect(buckets[0].metrics.heartRate!.avg).toBe(75);
+    expect(buckets[1].metrics.heartRate!.count).toBe(1);
+    expect(buckets[1].metrics.heartRate!.avg).toBe(90);
   });
 });
 
@@ -203,7 +340,6 @@ describe("aggregateIntoBuckets", () => {
 
 describe("appleHealth tRPC router", () => {
   it("status returns uploaded: false when no data is loaded", async () => {
-    // Import the router
     const { appRouter } = await import("./routers");
     const { createMockContext } = await import("./testHelpers");
 

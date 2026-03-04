@@ -45,3 +45,9 @@
 - [x] Add correlation charts (glucose vs steps, glucose vs heart rate, glucose vs workouts)
 - [x] Add Pearson correlation statistics with strength/direction indicators
 - [x] Write vitest tests for Apple Health parser and correlation logic (16 tests)
+- [x] Fix OOM crash on Render free tier (512MB) when uploading Apple Health ZIP
+- [x] Stream ZIP extraction to disk instead of buffering entire file in memory
+- [x] Stream XML parsing from disk instead of loading full XML buffer
+- [x] Aggregate data points on-the-fly during parsing instead of accumulating all raw points
+- [x] Limit upload file size (500MB max) and add early rejection
+- [x] Update tests for streaming parser changes (22 Apple Health tests, 44 total)
