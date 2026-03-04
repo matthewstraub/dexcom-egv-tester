@@ -12,15 +12,14 @@ import {
   disconnectDexcom,
 } from "./dexcom";
 import { pearsonCorrelation } from "./appleHealth";
-import { storagePut } from "./storage";
+// S3 storage no longer needed — uploads go to temp file on disk
 import { getDb } from "./db";
 import {
   healthUploadJobs,
   healthBuckets,
   healthWorkouts,
 } from "../drizzle/schema";
-import { processHealthUpload } from "./appleHealthProcessor";
-import { nanoid } from "nanoid";
+// processHealthUpload is called from the Express route, not from tRPC
 import type { AggregatedBucket, AppleHealthParseSummary } from "./appleHealth";
 import type { AppleHealthMetricKey } from "@shared/const";
 
@@ -135,61 +134,6 @@ export const appRouter = router({
   }),
 
   appleHealth: router({
-    /**
-     * Step 1: Upload the ZIP file content and start processing.
-     * The frontend sends the file as a base64 string (chunked if needed),
-     * we upload it to S3, create a job, and start background processing.
-     *
-     * For very large files, the frontend should use the presigned upload flow instead.
-     */
-    getUploadUrl: publicProcedure.mutation(async () => {
-      // Generate a unique S3 key for this upload
-      const fileKey = `apple-health-uploads/${nanoid()}.zip`;
-
-      try {
-        // We'll use a two-step approach:
-        // 1. Return the S3 key to the frontend
-        // 2. Frontend uploads directly via the Express route (which streams to S3)
-        return {
-          fileKey,
-          uploadUrl: `/api/apple-health/upload-to-s3`,
-        };
-      } catch (err: any) {
-        throw new Error("Failed to prepare upload: " + (err.message || "Unknown error"));
-      }
-    }),
-
-    /**
-     * Step 2: Start processing a previously uploaded file.
-     * Creates a job record and kicks off background processing.
-     */
-    startProcessing: publicProcedure
-      .input(z.object({
-        s3Key: z.string(),
-        s3Url: z.string(),
-      }))
-      .mutation(async ({ input }) => {
-        const db = await getDb();
-        if (!db) throw new Error("Database not available");
-
-        // Create the job record
-        const result = await db.insert(healthUploadJobs).values({
-          s3Key: input.s3Key,
-          s3Url: input.s3Url,
-          status: "pending",
-        });
-
-        const jobId = Number(result[0].insertId);
-
-        // Fire and forget — start processing in the background
-        // This allows the mutation to return immediately
-        processHealthUpload(jobId).catch((err) => {
-          console.error(`[AppleHealth] Background processing failed for job ${jobId}:`, err);
-        });
-
-        return { jobId };
-      }),
-
     /**
      * Poll the status of a processing job.
      */

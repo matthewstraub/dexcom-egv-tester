@@ -61,3 +61,7 @@
 - [x] Update frontend: direct S3 upload with XHR progress, poll for completion
 - [x] Remove in-memory storage, use database for all health data
 - [x] Update tests for new async architecture (44 tests passing)
+- [x] Fix: S3 storage not available on Render (missing BUILT_IN_FORGE_API credentials)
+- [x] Remove S3 dependency from Apple Health upload flow
+- [x] Use temp file on disk + async background processing instead of S3
+- [x] Keep database persistence for parsed results (buckets, workouts, job status)

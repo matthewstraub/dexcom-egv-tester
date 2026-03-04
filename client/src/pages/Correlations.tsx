@@ -116,7 +116,6 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
   }, [jobStatus.data, uploadStage]);
 
   // Mutations
-  const startProcessing = trpc.appleHealth.startProcessing.useMutation();
   const correlationMutation = trpc.appleHealth.correlations.useMutation();
   const clearMutation = trpc.appleHealth.clear.useMutation({
     onSuccess: () => {
@@ -149,11 +148,12 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
     }
 
     setUploadStage("uploading");
-    setUploadProgress(`Uploading ${sizeMB.toFixed(0)} MB to storage...`);
+    setUploadProgress(`Uploading ${sizeMB.toFixed(0)} MB...`);
 
     try {
-      // Step 1: Upload the ZIP directly to S3 via our Express route
-      const s3Result = await new Promise<{ s3Key: string; s3Url: string }>((resolve, reject) => {
+      // Upload the ZIP to the server, which saves to temp file and starts
+      // background processing. Returns immediately with a job ID.
+      const uploadResult = await new Promise<{ jobId: number }>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
         xhr.timeout = 10 * 60 * 1000; // 10 minutes for upload
 
@@ -162,8 +162,8 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
             const pct = Math.round((event.loaded / event.total) * 100);
             setUploadProgress(
               pct < 100
-                ? `Uploading to storage... ${pct}%`
-                : "Finalizing upload..."
+                ? `Uploading... ${pct}%`
+                : "Upload complete, starting processing..."
             );
           }
         });
@@ -180,7 +180,7 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
           try {
             const data = JSON.parse(xhr.responseText);
             if (xhr.status >= 200 && xhr.status < 300 && data.success) {
-              resolve({ s3Key: data.s3Key, s3Url: data.s3Url });
+              resolve({ jobId: data.jobId });
             } else {
               reject(new Error(data.error || `Upload failed (HTTP ${xhr.status})`));
             }
@@ -197,21 +197,15 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
           reject(new Error("Upload timed out. Try a smaller file."));
         });
 
-        xhr.open("POST", "/api/apple-health/upload-to-s3");
+        xhr.open("POST", "/api/apple-health/upload");
         xhr.setRequestHeader("Content-Type", "application/octet-stream");
         xhr.send(file);
       });
 
-      // Step 2: Start background processing
+      // Switch to processing stage — the server is now parsing in the background
       setUploadStage("processing");
       setUploadProgress("Processing health data (this may take a few minutes)...");
-
-      const { jobId } = await startProcessing.mutateAsync({
-        s3Key: s3Result.s3Key,
-        s3Url: s3Result.s3Url,
-      });
-
-      setCurrentJobId(jobId);
+      setCurrentJobId(uploadResult.jobId);
       // Polling will be handled by the jobStatus query with refetchInterval
 
     } catch (err: any) {
@@ -221,7 +215,7 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
-  }, [startProcessing]);
+  }, []);
 
   const handleCalculateCorrelations = useCallback(async () => {
     if (!egvQuery.data?.records?.length) {

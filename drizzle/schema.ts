@@ -44,10 +44,8 @@ export type InsertDexcomToken = typeof dexcomTokens.$inferInsert;
  */
 export const healthUploadJobs = mysqlTable("health_upload_jobs", {
   id: int("id").autoincrement().primaryKey(),
-  /** S3 key for the uploaded ZIP file */
-  s3Key: text("s3Key").notNull(),
-  /** S3 URL for the uploaded ZIP file */
-  s3Url: text("s3Url").notNull(),
+  /** Identifier for the upload (e.g. temp file name or reference) */
+  fileRef: text("fileRef").notNull(),
   /** Processing status */
   status: mysqlEnum("status", ["pending", "processing", "completed", "failed"]).default("pending").notNull(),
   /** Error message if processing failed */

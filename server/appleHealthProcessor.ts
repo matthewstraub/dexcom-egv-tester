@@ -1,7 +1,7 @@
 /**
  * Apple Health Background Processor
  *
- * Downloads a ZIP from S3, streams XML extraction and parsing,
+ * Reads a ZIP from a temp file on disk, streams XML extraction and parsing,
  * aggregates into 15-minute buckets on-the-fly, and writes results
  * to the database in batches.
  *
@@ -22,62 +22,10 @@ import {
   type AppleHealthParseSummary,
 } from "./appleHealth";
 import { getDb } from "./db";
-import { Readable } from "stream";
 import yauzl from "yauzl";
 import fs from "fs";
-import path from "path";
-import os from "os";
 
 const BUCKET_BATCH_SIZE = 500; // Write buckets to DB in batches of 500
-
-/**
- * Download a file from a URL as a stream and save to a temp file.
- * This avoids loading the entire file into memory.
- */
-async function downloadToTempFile(url: string): Promise<{ tempPath: string; size: number }> {
-  const tempPath = path.join(os.tmpdir(), `apple-health-${Date.now()}.zip`);
-  const response = await fetch(url);
-
-  if (!response.ok || !response.body) {
-    throw new Error(`Failed to download file from S3: ${response.status} ${response.statusText}`);
-  }
-
-  const writeStream = fs.createWriteStream(tempPath);
-  let size = 0;
-
-  // Convert web ReadableStream to Node.js stream and pipe to file
-  const reader = response.body.getReader();
-
-  return new Promise<{ tempPath: string; size: number }>((resolve, reject) => {
-    function pump() {
-      reader.read().then(({ done, value }) => {
-        if (done) {
-          writeStream.end();
-          return;
-        }
-        size += value.byteLength;
-        const canContinue = writeStream.write(Buffer.from(value));
-        if (canContinue) {
-          pump();
-        } else {
-          writeStream.once("drain", pump);
-        }
-      }).catch((err) => {
-        writeStream.destroy();
-        fs.unlink(tempPath, () => {});
-        reject(err);
-      });
-    }
-
-    writeStream.on("finish", () => resolve({ tempPath, size }));
-    writeStream.on("error", (err) => {
-      fs.unlink(tempPath, () => {});
-      reject(err);
-    });
-
-    pump();
-  });
-}
 
 /**
  * Extract export.xml from a ZIP file on disk using yauzl (streaming, low memory).
@@ -208,20 +156,19 @@ async function writeWorkoutsToDb(
  * Process an Apple Health upload job.
  * This is the main background processing function.
  *
- * 1. Downloads ZIP from S3 to a temp file
+ * 1. Reads ZIP from the temp file on disk
  * 2. Streams XML from the ZIP
  * 3. Parses and aggregates on-the-fly
  * 4. Writes results to the database
  * 5. Updates the job status
+ * 6. Cleans up the temp file
  */
-export async function processHealthUpload(jobId: number): Promise<void> {
+export async function processHealthUpload(jobId: number, tempFilePath: string): Promise<void> {
   const db = await getDb();
   if (!db) {
     console.error("[HealthProcessor] Database not available");
     return;
   }
-
-  let tempPath: string | null = null;
 
   try {
     // Mark job as processing
@@ -230,30 +177,21 @@ export async function processHealthUpload(jobId: number): Promise<void> {
       .set({ status: "processing" })
       .where(eq(healthUploadJobs.id, jobId));
 
-    // Get the job details
-    const [job] = await db
-      .select()
-      .from(healthUploadJobs)
-      .where(eq(healthUploadJobs.id, jobId))
-      .limit(1);
+    console.log(`[HealthProcessor] Starting job ${jobId}: reading from ${tempFilePath}`);
 
-    if (!job) {
-      console.error(`[HealthProcessor] Job ${jobId} not found`);
-      return;
+    // Verify the temp file exists
+    if (!fs.existsSync(tempFilePath)) {
+      throw new Error("Upload file not found on disk. It may have been cleaned up.");
     }
 
-    console.log(`[HealthProcessor] Starting job ${jobId}: downloading from S3...`);
+    const fileStats = fs.statSync(tempFilePath);
+    console.log(`[HealthProcessor] File size: ${(fileStats.size / 1024 / 1024).toFixed(2)} MB`);
 
-    // Step 1: Download ZIP from S3 to temp file
-    const { tempPath: downloadedPath, size } = await downloadToTempFile(job.s3Url);
-    tempPath = downloadedPath;
-    console.log(`[HealthProcessor] Downloaded ${(size / 1024 / 1024).toFixed(2)} MB to temp file`);
-
-    // Step 2: Stream XML from ZIP
+    // Step 1: Stream XML from ZIP
     console.log(`[HealthProcessor] Extracting XML from ZIP...`);
-    const xmlStream = await streamXmlFromZipFile(tempPath);
+    const xmlStream = await streamXmlFromZipFile(tempFilePath);
 
-    // Step 3: Parse and aggregate
+    // Step 2: Parse and aggregate
     console.log(`[HealthProcessor] Parsing XML with on-the-fly aggregation...`);
     const { summary, buckets } = await streamParseAndAggregate(xmlStream, 15);
 
@@ -262,18 +200,11 @@ export async function processHealthUpload(jobId: number): Promise<void> {
       `${summary.workouts.length} workouts from ${summary.recordCount} total records`
     );
 
-    // Step 4: Delete any existing data from previous jobs (keep only latest)
-    // First, find all other jobs and delete their data
-    const existingJobs = await db
-      .select({ id: healthUploadJobs.id })
-      .from(healthUploadJobs)
-      .where(eq(healthUploadJobs.id, jobId));
-
-    // Delete old bucket and workout data for this job (in case of retry)
+    // Step 3: Delete any existing data from this job (in case of retry)
     await db.delete(healthBuckets).where(eq(healthBuckets.jobId, jobId));
     await db.delete(healthWorkouts).where(eq(healthWorkouts.jobId, jobId));
 
-    // Step 5: Write results to database
+    // Step 4: Write results to database
     console.log(`[HealthProcessor] Writing ${buckets.length} buckets to database...`);
     const totalBucketRows = await writeBucketsToDb(db, jobId, buckets);
     console.log(`[HealthProcessor] Wrote ${totalBucketRows} bucket rows`);
@@ -281,7 +212,7 @@ export async function processHealthUpload(jobId: number): Promise<void> {
     console.log(`[HealthProcessor] Writing ${summary.workouts.length} workouts to database...`);
     await writeWorkoutsToDb(db, jobId, summary.workouts);
 
-    // Step 6: Update job as completed
+    // Step 5: Update job as completed
     await db
       .update(healthUploadJobs)
       .set({
@@ -313,10 +244,9 @@ export async function processHealthUpload(jobId: number): Promise<void> {
     }
   } finally {
     // Clean up temp file
-    if (tempPath) {
-      fs.unlink(tempPath, (err) => {
-        if (err) console.warn("[HealthProcessor] Failed to clean up temp file:", err.message);
-      });
-    }
+    fs.unlink(tempFilePath, (err) => {
+      if (err) console.warn("[HealthProcessor] Failed to clean up temp file:", err.message);
+      else console.log(`[HealthProcessor] Cleaned up temp file: ${tempFilePath}`);
+    });
   }
 }
