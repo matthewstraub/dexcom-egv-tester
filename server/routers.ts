@@ -135,8 +135,8 @@ export const appRouter = router({
 
   appleHealth: router({
     /**
-     * Save parsed results from the client-side Web Worker.
-     * The browser does all the heavy XML parsing; this just persists the results.
+     * Step 1: Save summary + workouts (small payload ~0.5MB).
+     * Returns a jobId that the frontend uses for subsequent bucket batch saves.
      */
     saveResults: publicProcedure
       .input(
@@ -152,22 +152,6 @@ export const appRouter = router({
             }).nullable(),
             bucketCount: z.number(),
           }),
-          buckets: z.array(
-            z.object({
-              bucketStart: z.string(),
-              bucketEnd: z.string(),
-              metrics: z.record(
-                z.string(),
-                z.object({
-                  avg: z.number(),
-                  min: z.number(),
-                  max: z.number(),
-                  sum: z.number(),
-                  count: z.number(),
-                })
-              ),
-            })
-          ),
           workouts: z.array(
             z.object({
               activityType: z.string(),
@@ -188,6 +172,11 @@ export const appRouter = router({
         const db = await getDb();
         if (!db) throw new Error("Database not available");
 
+        // Clear any existing data first
+        await db.delete(healthBuckets);
+        await db.delete(healthWorkouts);
+        await db.delete(healthUploadJobs);
+
         // Create a completed job record
         const result = await db.insert(healthUploadJobs).values({
           fileRef: "client-parsed",
@@ -203,44 +192,7 @@ export const appRouter = router({
 
         const jobId = Number(result[0].insertId);
 
-        // Write buckets in batches
-        const bucketRows: Array<{
-          jobId: number;
-          bucketStart: string;
-          bucketEnd: string;
-          metric: string;
-          avg: string;
-          min: string;
-          max: string;
-          sum: string;
-          count: number;
-        }> = [];
-
-        for (const bucket of input.buckets) {
-          for (const [metric, stats] of Object.entries(bucket.metrics)) {
-            if (!stats) continue;
-            bucketRows.push({
-              jobId,
-              bucketStart: bucket.bucketStart,
-              bucketEnd: bucket.bucketEnd,
-              metric,
-              avg: String(stats.avg),
-              min: String(stats.min),
-              max: String(stats.max),
-              sum: String(stats.sum),
-              count: stats.count,
-            });
-          }
-        }
-
-        for (let i = 0; i < bucketRows.length; i += BUCKET_BATCH_SIZE) {
-          const batch = bucketRows.slice(i, i + BUCKET_BATCH_SIZE);
-          if (batch.length > 0) {
-            await db.insert(healthBuckets).values(batch);
-          }
-        }
-
-        // Write workouts in batches
+        // Write workouts in batches (small payload)
         if (input.workouts.length > 0) {
           const workoutRows = input.workouts.map((w) => ({
             jobId,
@@ -265,8 +217,80 @@ export const appRouter = router({
         return {
           success: true,
           jobId,
-          bucketRowsWritten: bucketRows.length,
           workoutsWritten: input.workouts.length,
+        };
+      }),
+
+    /**
+     * Step 2: Save a batch of buckets (called multiple times by the frontend).
+     * Each call sends ~10K buckets (~3MB) to stay well under body parser limits.
+     */
+    saveBucketBatch: publicProcedure
+      .input(
+        z.object({
+          jobId: z.number(),
+          buckets: z.array(
+            z.object({
+              bucketStart: z.string(),
+              bucketEnd: z.string(),
+              metrics: z.record(
+                z.string(),
+                z.object({
+                  avg: z.number(),
+                  min: z.number(),
+                  max: z.number(),
+                  sum: z.number(),
+                  count: z.number(),
+                })
+              ),
+            })
+          ),
+        })
+      )
+      .mutation(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new Error("Database not available");
+
+        const bucketRows: Array<{
+          jobId: number;
+          bucketStart: string;
+          bucketEnd: string;
+          metric: string;
+          avg: string;
+          min: string;
+          max: string;
+          sum: string;
+          count: number;
+        }> = [];
+
+        for (const bucket of input.buckets) {
+          for (const [metric, stats] of Object.entries(bucket.metrics)) {
+            if (!stats) continue;
+            bucketRows.push({
+              jobId: input.jobId,
+              bucketStart: bucket.bucketStart,
+              bucketEnd: bucket.bucketEnd,
+              metric,
+              avg: String(stats.avg),
+              min: String(stats.min),
+              max: String(stats.max),
+              sum: String(stats.sum),
+              count: stats.count,
+            });
+          }
+        }
+
+        // Write to DB in sub-batches of 500 rows
+        for (let i = 0; i < bucketRows.length; i += BUCKET_BATCH_SIZE) {
+          const batch = bucketRows.slice(i, i + BUCKET_BATCH_SIZE);
+          if (batch.length > 0) {
+            await db.insert(healthBuckets).values(batch);
+          }
+        }
+
+        return {
+          success: true,
+          rowsWritten: bucketRows.length,
         };
       }),
 

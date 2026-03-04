@@ -75,6 +75,7 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
 
   // Mutations
   const saveResultsMutation = trpc.appleHealth.saveResults.useMutation();
+  const saveBucketBatchMutation = trpc.appleHealth.saveBucketBatch.useMutation();
   const correlationMutation = trpc.appleHealth.correlations.useMutation();
   const clearMutation = trpc.appleHealth.clear.useMutation({
     onSuccess: () => {
@@ -165,18 +166,35 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
       worker.terminate();
       workerRef.current = null;
 
-      // Stage 3: Save results to server
+      // Stage 3: Save results to server in batches
       setUploadStage("saving");
       setProgressDetail(
-        `Saving ${result.buckets.length.toLocaleString()} buckets and ${result.workouts.length} workouts to database...`
+        `Saving ${result.workouts.length} workouts...`
       );
-      setProgressPct(95);
+      setProgressPct(90);
 
-      await saveResultsMutation.mutateAsync({
+      // Step 1: Save summary + workouts (small payload)
+      const saveResult = await saveResultsMutation.mutateAsync({
         summary: result.summary,
-        buckets: result.buckets,
         workouts: result.workouts,
       });
+
+      // Step 2: Save buckets in batches of 10,000 (~3MB each)
+      const BATCH_SIZE = 10000;
+      const totalBatches = Math.ceil(result.buckets.length / BATCH_SIZE);
+      for (let i = 0; i < result.buckets.length; i += BATCH_SIZE) {
+        const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+        const batch = result.buckets.slice(i, i + BATCH_SIZE);
+        setProgressDetail(
+          `Saving buckets batch ${batchNum}/${totalBatches} (${Math.min(i + BATCH_SIZE, result.buckets.length).toLocaleString()}/${result.buckets.length.toLocaleString()})...`
+        );
+        setProgressPct(90 + Math.round((batchNum / totalBatches) * 10));
+
+        await saveBucketBatchMutation.mutateAsync({
+          jobId: saveResult.jobId,
+          buckets: batch,
+        });
+      }
 
       setUploadStage("done");
       setProgressDetail("");
