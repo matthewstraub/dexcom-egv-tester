@@ -14,8 +14,7 @@ CREATE TABLE `health_buckets` (
 --> statement-breakpoint
 CREATE TABLE `health_upload_jobs` (
 	`id` int AUTO_INCREMENT NOT NULL,
-	`s3Key` text NOT NULL,
-	`s3Url` text NOT NULL,
+	`fileRef` text NOT NULL,
 	`status` enum('pending','processing','completed','failed') NOT NULL DEFAULT 'pending',
 	`errorMessage` text,
 	`totalRecordsScanned` int,

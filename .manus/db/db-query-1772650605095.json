@@ -1,0 +1,62 @@
+{
+  "query": "SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'health_upload_jobs' ORDER BY ORDINAL_POSITION;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway02.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 2oY192HK2UDLJrh.9344575b336b --database dawVN6szSu27UHHmhTWSVg --execute SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'health_upload_jobs' ORDER BY ORDINAL_POSITION;",
+  "rows": [
+    {
+      "COLUMN_NAME": "id",
+      "DATA_TYPE": "int"
+    },
+    {
+      "COLUMN_NAME": "status",
+      "DATA_TYPE": "enum"
+    },
+    {
+      "COLUMN_NAME": "errorMessage",
+      "DATA_TYPE": "text"
+    },
+    {
+      "COLUMN_NAME": "totalRecordsScanned",
+      "DATA_TYPE": "int"
+    },
+    {
+      "COLUMN_NAME": "relevantDataPoints",
+      "DATA_TYPE": "int"
+    },
+    {
+      "COLUMN_NAME": "workoutCount",
+      "DATA_TYPE": "int"
+    },
+    {
+      "COLUMN_NAME": "metricsFound",
+      "DATA_TYPE": "text"
+    },
+    {
+      "COLUMN_NAME": "dataRangeStart",
+      "DATA_TYPE": "text"
+    },
+    {
+      "COLUMN_NAME": "dataRangeEnd",
+      "DATA_TYPE": "text"
+    },
+    {
+      "COLUMN_NAME": "bucketCount",
+      "DATA_TYPE": "int"
+    },
+    {
+      "COLUMN_NAME": "createdAt",
+      "DATA_TYPE": "timestamp"
+    },
+    {
+      "COLUMN_NAME": "updatedAt",
+      "DATA_TYPE": "timestamp"
+    },
+    {
+      "COLUMN_NAME": "fileRef",
+      "DATA_TYPE": "text"
+    }
+  ],
+  "messages": [],
+  "stdout": "COLUMN_NAME\tDATA_TYPE\nid\tint\nstatus\tenum\nerrorMessage\ttext\ntotalRecordsScanned\tint\nrelevantDataPoints\tint\nworkoutCount\tint\nmetricsFound\ttext\ndataRangeStart\ttext\ndataRangeEnd\ttext\nbucketCount\tint\ncreatedAt\ttimestamp\nupdatedAt\ttimestamp\nfileRef\ttext\n",
+  "stderr": "",
+  "execution_time_ms": 55
+}

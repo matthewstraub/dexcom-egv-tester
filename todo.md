@@ -65,3 +65,5 @@
 - [x] Remove S3 dependency from Apple Health upload flow
 - [x] Use temp file on disk + async background processing instead of S3
 - [x] Keep database persistence for parsed results (buckets, workouts, job status)
+- [x] Fix production DB migration: old s3Key/s3Url columns conflict with new fileRef column
+- [x] Clean up migration files: consolidated into single clean migration 0003_first_brood.sql

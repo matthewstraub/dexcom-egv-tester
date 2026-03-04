@@ -1,0 +1,49 @@
+{
+  "query": "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'health_upload_jobs' ORDER BY ORDINAL_POSITION;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway02.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 2oY192HK2UDLJrh.9344575b336b --database dawVN6szSu27UHHmhTWSVg --execute SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'health_upload_jobs' ORDER BY ORDINAL_POSITION;",
+  "rows": [
+    {
+      "COLUMN_NAME": "id"
+    },
+    {
+      "COLUMN_NAME": "status"
+    },
+    {
+      "COLUMN_NAME": "errorMessage"
+    },
+    {
+      "COLUMN_NAME": "totalRecordsScanned"
+    },
+    {
+      "COLUMN_NAME": "relevantDataPoints"
+    },
+    {
+      "COLUMN_NAME": "workoutCount"
+    },
+    {
+      "COLUMN_NAME": "metricsFound"
+    },
+    {
+      "COLUMN_NAME": "dataRangeStart"
+    },
+    {
+      "COLUMN_NAME": "dataRangeEnd"
+    },
+    {
+      "COLUMN_NAME": "bucketCount"
+    },
+    {
+      "COLUMN_NAME": "createdAt"
+    },
+    {
+      "COLUMN_NAME": "updatedAt"
+    },
+    {
+      "COLUMN_NAME": "fileRef"
+    }
+  ],
+  "messages": [],
+  "stdout": "COLUMN_NAME\nid\nstatus\nerrorMessage\ntotalRecordsScanned\nrelevantDataPoints\nworkoutCount\nmetricsFound\ndataRangeStart\ndataRangeEnd\nbucketCount\ncreatedAt\nupdatedAt\nfileRef\n",
+  "stderr": "",
+  "execution_time_ms": 145
+}

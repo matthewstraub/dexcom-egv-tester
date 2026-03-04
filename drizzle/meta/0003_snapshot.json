@@ -1,7 +1,7 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "817513e1-8791-40b1-9277-9cc761e266f5",
+  "id": "335e9689-e1c0-427e-8547-8d830f1a3659",
   "prevId": "4b03925e-2b05-4ce7-9deb-265a42397747",
   "tables": {
     "dexcom_tokens": {
@@ -185,15 +185,8 @@
           "notNull": true,
           "autoincrement": true
         },
-        "s3Key": {
-          "name": "s3Key",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "s3Url": {
-          "name": "s3Url",
+        "fileRef": {
+          "name": "fileRef",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
