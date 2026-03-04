@@ -51,3 +51,5 @@
 - [x] Aggregate data points on-the-fly during parsing instead of accumulating all raw points
 - [x] Limit upload file size (500MB max) and add early rejection
 - [x] Update tests for streaming parser changes (22 Apple Health tests, 44 total)
+- [x] Investigate Apple Health upload returning HTML instead of JSON (Unexpected token '<')
+- [x] Fix root cause: register upload route before body parsers + handle non-JSON responses gracefully

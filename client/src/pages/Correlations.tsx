@@ -48,6 +48,7 @@ const METRIC_ICONS: Record<AppleHealthMetricKey, typeof Heart> = {
 
 export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps) {
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState("");
   const [selectedMetrics, setSelectedMetrics] = useState<AppleHealthMetricKey[]>(["heartRate", "stepCount"]);
   const [egvStartDate, setEgvStartDate] = useState("");
   const [egvEndDate, setEgvEndDate] = useState("");
@@ -90,26 +91,75 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
       return;
     }
 
-    // Warn if file is very large
     const sizeMB = file.size / 1024 / 1024;
-    if (sizeMB > 200) {
-      toast.warning(`Large file (${sizeMB.toFixed(0)} MB). Processing may take a while.`);
+    if (sizeMB > 500) {
+      toast.error("File too large (max 500 MB). Try exporting a shorter date range from Apple Health.");
+      return;
     }
 
     setUploading(true);
+    setUploadProgress("Reading file...");
+
     try {
-      const arrayBuffer = await file.arrayBuffer();
-      const response = await fetch("/api/apple-health/upload", {
-        method: "POST",
-        headers: { "Content-Type": "application/octet-stream" },
-        body: arrayBuffer,
+      setUploadProgress(`Uploading ${sizeMB.toFixed(0)} MB...`);
+
+      // Use XMLHttpRequest for upload progress tracking
+      const result = await new Promise<any>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+
+        // 10 minutes timeout for large files
+        xhr.timeout = 10 * 60 * 1000;
+
+        xhr.upload.addEventListener("progress", (event) => {
+          if (event.lengthComputable) {
+            const pct = Math.round((event.loaded / event.total) * 100);
+            setUploadProgress(pct < 100 ? `Uploading... ${pct}%` : "Processing on server...");
+          }
+        });
+
+        xhr.addEventListener("load", () => {
+          // Check if response is JSON
+          const contentType = xhr.getResponseHeader("content-type") || "";
+          if (!contentType.includes("application/json")) {
+            reject(new Error(
+              `Server returned an unexpected response (${xhr.status}). ` +
+              "This may be caused by a timeout or memory limit on the hosting platform. " +
+              "Try exporting a shorter date range from Apple Health to reduce file size."
+            ));
+            return;
+          }
+
+          try {
+            const data = JSON.parse(xhr.responseText);
+            if (xhr.status >= 200 && xhr.status < 300) {
+              resolve(data);
+            } else {
+              reject(new Error(data.error || `Upload failed (HTTP ${xhr.status})`));
+            }
+          } catch {
+            reject(new Error(
+              `Failed to parse server response (HTTP ${xhr.status}). ` +
+              "The server may have run out of memory processing your file. " +
+              "Try a smaller export."
+            ));
+          }
+        });
+
+        xhr.addEventListener("error", () => {
+          reject(new Error("Network error during upload. Please check your connection and try again."));
+        });
+
+        xhr.addEventListener("timeout", () => {
+          reject(new Error(
+            "Upload timed out. Your Apple Health export may be too large for the server. " +
+            "Try exporting a shorter date range from the Health app."
+          ));
+        });
+
+        xhr.open("POST", "/api/apple-health/upload");
+        xhr.setRequestHeader("Content-Type", "application/octet-stream");
+        xhr.send(file);
       });
-
-      const result = await response.json();
-
-      if (!response.ok) {
-        throw new Error(result.error || "Upload failed");
-      }
 
       toast.success(
         `Parsed ${result.summary.relevantDataPoints.toLocaleString()} data points and ${result.summary.workouts} workouts from ${result.summary.totalRecordsScanned.toLocaleString()} records`
@@ -119,7 +169,6 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
       if (result.summary.dateRange) {
         const start = new Date(result.summary.dateRange.start);
         const end = new Date(result.summary.dateRange.end);
-        // Limit to last 7 days of data or 30 days max
         const sevenDaysAgo = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);
         const effectiveStart = sevenDaysAgo > start ? sevenDaysAgo : start;
         setEgvStartDate(effectiveStart.toISOString().slice(0, 19));
@@ -133,7 +182,7 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
       toast.error(err.message || "Failed to process Apple Health export");
     } finally {
       setUploading(false);
-      // Reset file input
+      setUploadProgress("");
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   }, [healthStatus, healthBuckets, workouts]);
@@ -170,7 +219,6 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
   const hasHealthData = healthStatus.data?.uploaded === true;
   const hasEgvData = !!egvQuery.data?.records?.length;
 
-  // Memoize filtered workouts for the chart
   const filteredWorkouts = useMemo(() => {
     if (!workouts.data || !egvStartDate || !egvEndDate) return [];
     const start = new Date(egvStartDate).getTime();
@@ -202,6 +250,10 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
               <li>Scroll down and tap <strong>Export All Health Data</strong></li>
               <li>Save the ZIP file and upload it here</li>
             </ol>
+            <p className="text-yellow-400/80 mt-2">
+              <AlertTriangle className="w-3 h-3 inline mr-1" />
+              Large exports (100MB+) may take several minutes to process. If your hosting plan has limited memory, consider exporting a shorter date range.
+            </p>
           </div>
 
           <div className="flex items-center gap-3">
@@ -223,7 +275,7 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
               {uploading ? (
                 <>
                   <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-                  Processing...
+                  {uploadProgress || "Processing..."}
                 </>
               ) : (
                 <>

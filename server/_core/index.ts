@@ -32,15 +32,19 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 async function startServer() {
   const app = express();
   const server = createServer(app);
-  // Configure body parser with larger size limit for file uploads
+
+  // Apple Health upload route MUST be registered BEFORE body parsers.
+  // The upload sends raw binary (application/octet-stream) which express.json()
+  // would attempt to parse and consume, leaving the stream empty for our handler.
+  registerAppleHealthRoutes(app);
+
+  // Configure body parser with larger size limit for other routes
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
   // OAuth callback under /api/oauth/callback
   registerOAuthRoutes(app);
   // Dexcom OAuth routes
   registerDexcomRoutes(app);
-  // Apple Health upload routes
-  registerAppleHealthRoutes(app);
   // tRPC API
   app.use(
     "/api/trpc",
