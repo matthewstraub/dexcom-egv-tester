@@ -1,14 +1,14 @@
 # Dexcom EGV Tester — Technical Documentation
 
-**Version**: 1.0  
-**Last Updated**: February 24, 2026  
+**Version**: 1.1  
+**Last Updated**: March 4, 2026  
 **Author**: Manus AI
 
 ---
 
 ## 1. Overview
 
-The Dexcom EGV Tester is a full-stack web application designed to authenticate with the Dexcom CGM (Continuous Glucose Monitor) API via OAuth2 and retrieve Estimated Glucose Values (EGVs). It provides a developer-focused interface for testing both the Dexcom Sandbox and Production API environments, visualizing glucose data on an interactive timeline chart, and exporting results in multiple formats.
+The Dexcom EGV Tester is a full-stack web application designed to authenticate with the Dexcom CGM (Continuous Glucose Monitor) API via OAuth2 and retrieve Estimated Glucose Values (EGVs). It provides a developer-focused interface for testing both the Dexcom Sandbox and Production API environments, visualizing glucose data on an interactive timeline chart, exporting results in multiple formats, and correlating glucose data with Apple Health metrics.
 
 The application runs in **single-user mode** — no login or account creation is required. Anyone who visits the app can connect to Dexcom, fetch data, and export results. A single set of OAuth tokens is stored per environment (Sandbox and Production), meaning the last person to authenticate "owns" the active connection.
 
@@ -170,7 +170,11 @@ The table below maps each significant file to its responsibility in the applicat
 | `server/_core/index.ts` | Express server entry point — registers tRPC middleware, Dexcom routes, and Vite dev middleware |
 | `server/_core/env.ts` | Environment variable parsing and validation |
 | `drizzle/schema.ts` | Database table definitions (`users`, `dexcom_tokens`) using Drizzle ORM |
-| `shared/const.ts` | Shared constants — Dexcom base URLs, environment types, timezone mode type |
+| `shared/const.ts` | Shared constants — Dexcom base URLs, environment types, timezone mode type, Apple Health metric definitions |
+| `server/appleHealth.ts` | Apple Health XML parser (streaming SAX), data aggregation into time buckets, Pearson correlation |
+| `server/appleHealthRoutes.ts` | Express route for ZIP file upload, in-memory storage of parsed health data |
+| `client/src/pages/Correlations.tsx` | Health Correlations tab — file upload, metric toggles, date range, correlation results |
+| `client/src/components/CorrelationChart.tsx` | Recharts ComposedChart overlaying glucose with health metrics and workout reference areas |
 | `client/src/pages/Home.tsx` | Main UI — tabbed interface (Connect, EGV Data, API Info), environment toggle, date inputs, data table |
 | `client/src/components/EgvChart.tsx` | Recharts-based glucose timeline chart with target range highlighting and trend tooltips |
 | `client/src/components/JsonViewer.tsx` | Syntax-highlighted JSON viewer for raw API responses |
@@ -212,6 +216,33 @@ Three export formats are available once EGV data is loaded:
 | **CSV** | All EGV record fields plus a formatted display time column | `dexcom-egvs_<env>_<timestamp>.csv` |
 | **JSON** | Raw Dexcom API response with pretty-print indentation | `dexcom-egvs_<env>_<timestamp>.json` |
 | **PNG** | Glucose chart rendered at 2x resolution via SVG-to-Canvas | `dexcom-chart_<env>_<timestamp>.png` |
+
+### 7.5 Apple Health Correlations
+
+The **Health Correlations** tab allows users to upload an Apple Health export (ZIP file containing `export.xml`) and overlay health metrics with EGV glucose data on a shared timeline.
+
+**Upload Flow**: Users export their health data from the Apple Health app on iPhone (Profile > Export All Health Data), which produces a ZIP file. The app extracts `export.xml` from the ZIP using `adm-zip`, then parses it with a streaming SAX parser (`sax` library) to handle files that can exceed 100 MB. Only relevant health metrics are extracted; all other record types are skipped for performance.
+
+**Supported Metrics**:
+
+| Metric | Apple Health Type | Unit | Chart Style |
+|--------|------------------|------|-------------|
+| Steps | `HKQuantityTypeIdentifierStepCount` | steps | Bar |
+| Heart Rate | `HKQuantityTypeIdentifierHeartRate` | bpm | Line |
+| Resting HR | `HKQuantityTypeIdentifierRestingHeartRate` | bpm | Dashed Line |
+| HRV (SDNN) | `HKQuantityTypeIdentifierHeartRateVariabilitySDNN` | ms | Line |
+| Active Energy | `HKQuantityTypeIdentifierActiveEnergyBurned` | kcal | Bar |
+| Exercise Time | `HKQuantityTypeIdentifierAppleExerciseTime` | min | Bar |
+| Distance | `HKQuantityTypeIdentifierDistanceWalkingRunning` | mi | Bar |
+| SpO2 | `HKQuantityTypeIdentifierOxygenSaturation` | % | Line |
+
+**Data Aggregation**: Parsed data points are aggregated into 15-minute time buckets. For each bucket, the system computes average, min, max, sum, and count for each metric. Cumulative metrics (steps, energy, exercise time, distance) use the sum value for display; rate metrics (heart rate, HRV) use the average.
+
+**Correlation Analysis**: The system computes Pearson correlation coefficients between glucose values and each health metric over matching 15-minute time buckets. Results are classified by strength (strong: |r| > 0.7, moderate: 0.4–0.7, weak: 0.2–0.4, negligible: < 0.2) and direction (positive or negative). A minimum of 5 overlapping buckets is required for a valid correlation.
+
+**Workout Overlay**: Workouts from the Apple Health export are displayed as shaded reference areas on the chart and listed in a separate card with activity type, duration, and calories burned.
+
+**Storage**: Health data is stored in-memory on the server (not persisted to the database). This is appropriate for the single-user mode and avoids storing potentially large datasets. Data is cleared on server restart or when the user clicks "Clear Data".
 
 ---
 
@@ -318,7 +349,7 @@ Run the full test suite with:
 pnpm test
 ```
 
-Tests are located in `server/dexcom.routers.test.ts`, `server/dexcom.credentials.test.ts`, `server/auth.logout.test.ts`, and `client/src/lib/export.test.ts`. They validate date range logic, tRPC procedure behavior, credential configuration, and export utilities.
+Tests are located in `server/dexcom.routers.test.ts`, `server/dexcom.credentials.test.ts`, `server/auth.logout.test.ts`, `client/src/lib/export.test.ts`, and `server/appleHealth.test.ts`. They validate date range logic, tRPC procedure behavior, credential configuration, export utilities, Apple Health parsing, aggregation, and correlation calculations.
 
 ### 11.8 Local Development
 

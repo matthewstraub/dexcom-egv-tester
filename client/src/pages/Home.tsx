@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { trpc } from "@/lib/trpc";
 import { EgvChart } from "@/components/EgvChart";
+import Correlations from "@/pages/Correlations";
 import { JsonViewer } from "@/components/JsonViewer";
 import {
   formatDate, formatDateTime, getLocalTimezoneAbbr, getLocalTimezoneName,
@@ -13,7 +14,7 @@ import {
 } from "@/lib/timezone";
 import {
   Activity, CheckCircle2, Circle, Clock, Download, ExternalLink, FileJson, FileSpreadsheet,
-  Image, Loader2, Plug, PlugZap, Terminal, Unplug, XCircle, Globe, FlaskConical,
+  Image, Loader2, Plug, PlugZap, Terminal, Unplug, XCircle, Globe, FlaskConical, HeartPulse,
 } from "lucide-react";
 import { exportCsv, exportJson, exportChartPng } from "@/lib/export";
 import { useEffect, useRef, useState } from "react";
@@ -311,6 +312,7 @@ export default function Home() {
           <TabsList className="bg-secondary/50 border border-border mb-6">
             <TabsTrigger value="connect" className="font-mono text-xs data-[state=active]:bg-card"><Plug className="h-3.5 w-3.5 mr-1.5" />Connect</TabsTrigger>
             <TabsTrigger value="data" className="font-mono text-xs data-[state=active]:bg-card" disabled={!dexcomStatus.data?.connected}><Activity className="h-3.5 w-3.5 mr-1.5" />EGV Data</TabsTrigger>
+            <TabsTrigger value="correlations" className="font-mono text-xs data-[state=active]:bg-card"><HeartPulse className="h-3.5 w-3.5 mr-1.5" />Health Correlations</TabsTrigger>
             <TabsTrigger value="info" className="font-mono text-xs data-[state=active]:bg-card"><ExternalLink className="h-3.5 w-3.5 mr-1.5" />API Info</TabsTrigger>
           </TabsList>
 
@@ -512,6 +514,10 @@ export default function Home() {
 
             {egvQuery.data && <JsonViewer data={egvQuery.data} title={`Response \u2014 GET /v3/users/self/egvs (${dexcomEnv})`} maxHeight="500px" />}
             {dataRange.data && <JsonViewer data={dataRange.data} title={`Response \u2014 GET /v3/users/self/dataRange (${dexcomEnv})`} maxHeight="300px" />}
+          </TabsContent>
+
+          <TabsContent value="correlations" className="space-y-6">
+            <Correlations dexcomEnv={dexcomEnv} timezone={timezone} />
           </TabsContent>
 
           <TabsContent value="info" className="space-y-6">

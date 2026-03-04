@@ -37,3 +37,11 @@
 - [x] Create deployment README with environment variable guide
 - [x] Update tests for single-user mode
 - [x] Write comprehensive documentation (architecture, services, maintenance)
+- [x] Build Apple Health XML parser (streaming SAX parser for large files)
+- [x] Extract key health metrics: steps, heart rate, workouts, active energy, HRV, resting HR
+- [x] Build file upload endpoint for Apple Health export ZIP
+- [x] Build frontend upload UI for Apple Health data
+- [x] Create correlation view: overlay health metrics with EGV data on shared timeline
+- [x] Add correlation charts (glucose vs steps, glucose vs heart rate, glucose vs workouts)
+- [x] Add Pearson correlation statistics with strength/direction indicators
+- [x] Write vitest tests for Apple Health parser and correlation logic (16 tests)
