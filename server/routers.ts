@@ -157,13 +157,13 @@ export const appRouter = router({
               activityType: z.string(),
               activityLabel: z.string(),
               duration: z.number(),
-              totalDistance: z.number().nullable(),
-              distanceUnit: z.string().nullable(),
-              totalEnergyBurned: z.number().nullable(),
-              energyUnit: z.string().nullable(),
+              totalDistance: z.number().nullable().optional(),
+              distanceUnit: z.string().nullable().optional(),
+              totalEnergyBurned: z.number().nullable().optional(),
+              energyUnit: z.string().nullable().optional(),
               startDate: z.string(),
               endDate: z.string(),
-              sourceName: z.string(),
+              sourceName: z.string().optional(),
             })
           ),
         })

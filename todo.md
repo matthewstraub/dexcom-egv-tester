@@ -79,3 +79,4 @@
 - [x] Test with real 102MB Apple Health export (2.1GB XML) — 32s, 169MB peak, 3.6M data points, 7 metrics
 - [x] Fix 'Unexpected token DOCTYPE' error: payload was 90MB, split into batched saves (~3MB each)
 - [x] Split save into saveResults (summary+workouts) + saveBucketBatch (10K buckets per batch)
+- [x] Fix Zod validation: made workout fields optional in Zod schema + extract sourceName in Web Worker

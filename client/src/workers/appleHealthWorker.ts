@@ -60,6 +60,11 @@ export interface WorkoutRecord {
   duration: number;
   startDate: string;
   endDate: string;
+  sourceName?: string;
+  totalDistance?: number | null;
+  distanceUnit?: string | null;
+  totalEnergyBurned?: number | null;
+  energyUnit?: string | null;
 }
 
 // ── Constants ──
@@ -340,12 +345,18 @@ async function processFile(file: File) {
         if (isNaN(st)) continue;
         const et = parseAppleHealthDate(extractAttr(tag, "endDate"));
         const dur = parseFloat(extractAttr(tag, "duration") || "0");
+        const src = extractAttr(tag, "sourceName");
         workouts.push({
           activityType: at,
           activityLabel: WORKOUT_TYPE_LABELS[at] || at.replace("HKWorkoutActivityType", ""),
           duration: dur,
           startDate: new Date(st).toISOString(),
           endDate: isNaN(et) ? new Date(st).toISOString() : new Date(et).toISOString(),
+          sourceName: src || undefined,
+          totalDistance: null,
+          distanceUnit: null,
+          totalEnergyBurned: null,
+          energyUnit: null,
         });
       }
 
