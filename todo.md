@@ -53,3 +53,11 @@
 - [x] Update tests for streaming parser changes (22 Apple Health tests, 44 total)
 - [x] Investigate Apple Health upload returning HTML instead of JSON (Unexpected token '<')
 - [x] Fix root cause: register upload route before body parsers + handle non-JSON responses gracefully
+- [x] Refactor Apple Health upload: upload ZIP directly to S3 (bypass Render)
+- [x] Add S3 upload endpoint (streams ZIP to S3 via Express route)
+- [x] Build background processing: stream ZIP from S3, parse XML, write results to DB
+- [x] Add database tables for health upload jobs, aggregated buckets, and workouts
+- [x] Add polling endpoint for processing status (jobStatus tRPC query)
+- [x] Update frontend: direct S3 upload with XHR progress, poll for completion
+- [x] Remove in-memory storage, use database for all health data
+- [x] Update tests for new async architecture (44 tests passing)

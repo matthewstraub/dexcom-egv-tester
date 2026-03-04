@@ -1,51 +1,28 @@
+/**
+ * Apple Health Express Routes
+ *
+ * Provides the raw binary upload endpoint that streams the ZIP file
+ * directly to S3 storage, bypassing Express body parsing entirely.
+ * This route is registered BEFORE body parsers in server/_core/index.ts.
+ */
+
 import type { Express, Request, Response } from "express";
-import {
-  streamXmlFromZip,
-  streamParseAndAggregate,
-  saveStreamToTempFile,
-  cleanupTempFile,
-  type AppleHealthParseSummary,
-  type AggregatedBucket,
-} from "./appleHealth";
-
-// In-memory store for the latest parsed Apple Health data (single-user mode)
-// We only store the summary + aggregated buckets, NOT the raw data points.
-let latestSummary: AppleHealthParseSummary | null = null;
-let latestBuckets: AggregatedBucket[] | null = null;
-let uploadTimestamp: string | null = null;
-
-export function getLatestHealthData() {
-  return {
-    summary: latestSummary,
-    buckets: latestBuckets,
-    uploadedAt: uploadTimestamp,
-  };
-}
-
-export function clearHealthData() {
-  latestSummary = null;
-  latestBuckets = null;
-  uploadTimestamp = null;
-}
+import { storagePut } from "./storage";
+import { nanoid } from "nanoid";
 
 // Max upload size: 500 MB (compressed ZIP)
 const MAX_UPLOAD_BYTES = 500 * 1024 * 1024;
 
 export function registerAppleHealthRoutes(app: Express) {
   /**
-   * POST /api/apple-health/upload
-   * Accepts a ZIP file (Apple Health export) as raw binary body.
-   * Streams the file to disk, then streams XML extraction and parsing
-   * to minimize memory usage (works within 512 MB).
+   * POST /api/apple-health/upload-to-s3
+   * Accepts a ZIP file as raw binary body.
+   * Buffers the upload and sends it to S3 storage.
+   * Returns the S3 key and URL for the frontend to start processing.
    *
-   * Query params:
-   *   - startDate (optional): ISO 8601 filter start
-   *   - endDate (optional): ISO 8601 filter end
-   *   - bucketMinutes (optional): aggregation bucket size, default 15
+   * This route is registered before body parsers so the raw stream is available.
    */
-  app.post("/api/apple-health/upload", async (req: Request, res: Response) => {
-    let tempPath: string | null = null;
-
+  app.post("/api/apple-health/upload-to-s3", async (req: Request, res: Response) => {
     try {
       // Check content-length header for early rejection
       const contentLength = parseInt(req.headers["content-length"] || "0");
@@ -56,86 +33,67 @@ export function registerAppleHealthRoutes(app: Express) {
         return;
       }
 
-      console.log("[AppleHealth] Streaming upload to temp file...");
+      console.log("[AppleHealth] Receiving upload for S3 storage...");
 
-      // Step 1: Stream the upload body to a temp file on disk (not in memory)
-      const { tempPath: savedPath, size } = await saveStreamToTempFile(req);
-      tempPath = savedPath;
+      // Collect the body into a buffer
+      // This is necessary because the S3 storage helper expects a Buffer.
+      // The ZIP file is already compressed, so this is the compressed size (typically 10-100MB).
+      const chunks: Buffer[] = [];
+      let totalSize = 0;
 
-      if (size === 0) {
+      await new Promise<void>((resolve, reject) => {
+        req.on("data", (chunk: Buffer) => {
+          totalSize += chunk.length;
+          if (totalSize > MAX_UPLOAD_BYTES) {
+            req.destroy();
+            reject(new Error(`File too large (exceeds ${MAX_UPLOAD_BYTES / 1024 / 1024} MB limit)`));
+            return;
+          }
+          chunks.push(chunk);
+        });
+        req.on("end", resolve);
+        req.on("error", reject);
+      });
+
+      if (totalSize === 0) {
         res.status(400).json({ error: "No file data received" });
         return;
       }
 
-      if (size > MAX_UPLOAD_BYTES) {
-        res.status(413).json({
-          error: `File too large (${(size / 1024 / 1024).toFixed(0)} MB). Maximum is ${MAX_UPLOAD_BYTES / 1024 / 1024} MB.`,
-        });
-        return;
-      }
+      const buffer = Buffer.concat(chunks);
+      console.log(`[AppleHealth] Received ${(totalSize / 1024 / 1024).toFixed(2)} MB, uploading to S3...`);
 
-      console.log(`[AppleHealth] Saved upload to disk: ${(size / 1024 / 1024).toFixed(2)} MB`);
+      // Upload to S3
+      const fileKey = `apple-health-uploads/${nanoid()}.zip`;
+      const { key, url } = await storagePut(fileKey, buffer, "application/zip");
 
-      // Parse optional date filters
-      const startDateStr = req.query.startDate as string | undefined;
-      const endDateStr = req.query.endDate as string | undefined;
-      const bucketMinutes = parseInt(req.query.bucketMinutes as string) || 15;
+      console.log(`[AppleHealth] Uploaded to S3: ${key}`);
 
-      const filterStart = startDateStr ? new Date(startDateStr) : undefined;
-      const filterEnd = endDateStr ? new Date(endDateStr) : undefined;
-
-      // Step 2: Stream XML from ZIP (yauzl streams decompression, no full buffer)
-      console.log("[AppleHealth] Streaming XML from ZIP...");
-      const xmlStream = await streamXmlFromZip(tempPath);
-
-      // Step 3: Stream-parse XML and aggregate into buckets on-the-fly
-      console.log("[AppleHealth] Parsing XML with on-the-fly aggregation...");
-      const { summary, buckets } = await streamParseAndAggregate(
-        xmlStream,
-        bucketMinutes,
-        filterStart,
-        filterEnd
-      );
-
-      console.log(
-        `[AppleHealth] Parsed ${summary.relevantDataPoints} data points, ` +
-        `${summary.workouts.length} workouts from ${summary.recordCount} total records. ` +
-        `Metrics found: ${summary.metricsFound.join(", ")}. ` +
-        `Aggregated into ${buckets.length} buckets.`
-      );
-
-      // Step 4: Store only summary + buckets (not raw data points)
-      latestSummary = summary;
-      latestBuckets = buckets;
-      uploadTimestamp = new Date().toISOString();
+      // Free the buffer immediately
+      chunks.length = 0;
 
       res.json({
         success: true,
-        summary: {
-          totalRecordsScanned: summary.recordCount,
-          relevantDataPoints: summary.relevantDataPoints,
-          workouts: summary.workouts.length,
-          metricsFound: summary.metricsFound,
-          dateRange: summary.dateRange
-            ? {
-                start: summary.dateRange.start.toISOString(),
-                end: summary.dateRange.end.toISOString(),
-              }
-            : null,
-          bucketCount: buckets.length,
-          bucketMinutes,
-        },
+        s3Key: key,
+        s3Url: url,
+        size: totalSize,
       });
     } catch (err: any) {
-      console.error("[AppleHealth] Upload error:", err);
+      console.error("[AppleHealth] Upload to S3 error:", err);
       res.status(500).json({
-        error: err.message || "Failed to process Apple Health export",
+        error: err.message || "Failed to upload file to storage",
       });
-    } finally {
-      // Always clean up the temp file
-      if (tempPath) {
-        cleanupTempFile(tempPath);
-      }
     }
   });
+}
+
+// Legacy exports removed — data is now stored in the database
+export function getLatestHealthData() {
+  // This is kept for backward compatibility but should not be used.
+  // All data is now in the database.
+  return { summary: null, buckets: null, uploadedAt: null };
+}
+
+export function clearHealthData() {
+  // No-op — clearing is now done via the database
 }

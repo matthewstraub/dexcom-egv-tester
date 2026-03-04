@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useMemo } from "react";
+import { useState, useRef, useCallback, useMemo, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -20,6 +20,8 @@ import {
   AlertTriangle,
   Dumbbell,
   Clock,
+  CheckCircle2,
+  XCircle,
 } from "lucide-react";
 import {
   type AppleHealthMetricKey,
@@ -46,14 +48,18 @@ const METRIC_ICONS: Record<AppleHealthMetricKey, typeof Heart> = {
   oxygenSaturation: Activity,
 };
 
+type UploadStage = "idle" | "uploading" | "processing" | "done" | "error";
+
 export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps) {
-  const [uploading, setUploading] = useState(false);
+  const [uploadStage, setUploadStage] = useState<UploadStage>("idle");
   const [uploadProgress, setUploadProgress] = useState("");
+  const [currentJobId, setCurrentJobId] = useState<number | null>(null);
   const [selectedMetrics, setSelectedMetrics] = useState<AppleHealthMetricKey[]>(["heartRate", "stepCount"]);
   const [egvStartDate, setEgvStartDate] = useState("");
   const [egvEndDate, setEgvEndDate] = useState("");
   const [correlating, setCorrelating] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Queries
   const healthStatus = trpc.appleHealth.status.useQuery();
@@ -65,13 +71,52 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
   });
   const dexcomStatus = trpc.dexcom.status.useQuery({ env: dexcomEnv });
 
-  // EGV data for the selected date range
-  const egvQuery = trpc.dexcom.egvs.useQuery(
-    { startDate: egvStartDate, endDate: egvEndDate, env: dexcomEnv },
-    { enabled: !!egvStartDate && !!egvEndDate && dexcomStatus.data?.connected === true }
+  // Job status polling
+  const jobStatus = trpc.appleHealth.jobStatus.useQuery(
+    { jobId: currentJobId! },
+    {
+      enabled: currentJobId !== null && (uploadStage === "processing"),
+      refetchInterval: 2000, // Poll every 2 seconds
+    }
   );
 
-  // Correlation calculation
+  // React to job status changes
+  useEffect(() => {
+    if (!jobStatus.data || uploadStage !== "processing") return;
+
+    if (jobStatus.data.status === "completed") {
+      setUploadStage("done");
+      setUploadProgress("");
+      setCurrentJobId(null);
+
+      // Refetch health data
+      healthStatus.refetch();
+      healthBuckets.refetch();
+      workouts.refetch();
+
+      // Auto-set date range
+      if (jobStatus.data.summary?.dateRange) {
+        const start = new Date(jobStatus.data.summary.dateRange.start);
+        const end = new Date(jobStatus.data.summary.dateRange.end);
+        const sevenDaysAgo = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);
+        const effectiveStart = sevenDaysAgo > start ? sevenDaysAgo : start;
+        setEgvStartDate(effectiveStart.toISOString().slice(0, 19));
+        setEgvEndDate(end.toISOString().slice(0, 19));
+      }
+
+      toast.success(
+        `Parsed ${jobStatus.data.summary?.relevantDataPoints.toLocaleString()} data points and ${jobStatus.data.summary?.workoutCount} workouts`
+      );
+    } else if (jobStatus.data.status === "failed") {
+      setUploadStage("error");
+      setUploadProgress("");
+      setCurrentJobId(null);
+      toast.error(jobStatus.data.errorMessage || "Processing failed");
+    }
+  }, [jobStatus.data, uploadStage]);
+
+  // Mutations
+  const startProcessing = trpc.appleHealth.startProcessing.useMutation();
   const correlationMutation = trpc.appleHealth.correlations.useMutation();
   const clearMutation = trpc.appleHealth.clear.useMutation({
     onSuccess: () => {
@@ -81,6 +126,12 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
       toast.success("Apple Health data cleared");
     },
   });
+
+  // EGV data for the selected date range
+  const egvQuery = trpc.dexcom.egvs.useQuery(
+    { startDate: egvStartDate, endDate: egvEndDate, env: dexcomEnv },
+    { enabled: !!egvStartDate && !!egvEndDate && dexcomStatus.data?.connected === true }
+  );
 
   const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -97,95 +148,80 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
       return;
     }
 
-    setUploading(true);
-    setUploadProgress("Reading file...");
+    setUploadStage("uploading");
+    setUploadProgress(`Uploading ${sizeMB.toFixed(0)} MB to storage...`);
 
     try {
-      setUploadProgress(`Uploading ${sizeMB.toFixed(0)} MB...`);
-
-      // Use XMLHttpRequest for upload progress tracking
-      const result = await new Promise<any>((resolve, reject) => {
+      // Step 1: Upload the ZIP directly to S3 via our Express route
+      const s3Result = await new Promise<{ s3Key: string; s3Url: string }>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
-
-        // 10 minutes timeout for large files
-        xhr.timeout = 10 * 60 * 1000;
+        xhr.timeout = 10 * 60 * 1000; // 10 minutes for upload
 
         xhr.upload.addEventListener("progress", (event) => {
           if (event.lengthComputable) {
             const pct = Math.round((event.loaded / event.total) * 100);
-            setUploadProgress(pct < 100 ? `Uploading... ${pct}%` : "Processing on server...");
+            setUploadProgress(
+              pct < 100
+                ? `Uploading to storage... ${pct}%`
+                : "Finalizing upload..."
+            );
           }
         });
 
         xhr.addEventListener("load", () => {
-          // Check if response is JSON
           const contentType = xhr.getResponseHeader("content-type") || "";
           if (!contentType.includes("application/json")) {
             reject(new Error(
-              `Server returned an unexpected response (${xhr.status}). ` +
-              "This may be caused by a timeout or memory limit on the hosting platform. " +
-              "Try exporting a shorter date range from Apple Health to reduce file size."
+              `Server returned unexpected response (${xhr.status}). ` +
+              "This may be a timeout or memory issue. Try a smaller export."
             ));
             return;
           }
-
           try {
             const data = JSON.parse(xhr.responseText);
-            if (xhr.status >= 200 && xhr.status < 300) {
-              resolve(data);
+            if (xhr.status >= 200 && xhr.status < 300 && data.success) {
+              resolve({ s3Key: data.s3Key, s3Url: data.s3Url });
             } else {
               reject(new Error(data.error || `Upload failed (HTTP ${xhr.status})`));
             }
           } catch {
-            reject(new Error(
-              `Failed to parse server response (HTTP ${xhr.status}). ` +
-              "The server may have run out of memory processing your file. " +
-              "Try a smaller export."
-            ));
+            reject(new Error("Failed to parse server response"));
           }
         });
 
         xhr.addEventListener("error", () => {
-          reject(new Error("Network error during upload. Please check your connection and try again."));
+          reject(new Error("Network error during upload"));
         });
 
         xhr.addEventListener("timeout", () => {
-          reject(new Error(
-            "Upload timed out. Your Apple Health export may be too large for the server. " +
-            "Try exporting a shorter date range from the Health app."
-          ));
+          reject(new Error("Upload timed out. Try a smaller file."));
         });
 
-        xhr.open("POST", "/api/apple-health/upload");
+        xhr.open("POST", "/api/apple-health/upload-to-s3");
         xhr.setRequestHeader("Content-Type", "application/octet-stream");
         xhr.send(file);
       });
 
-      toast.success(
-        `Parsed ${result.summary.relevantDataPoints.toLocaleString()} data points and ${result.summary.workouts} workouts from ${result.summary.totalRecordsScanned.toLocaleString()} records`
-      );
+      // Step 2: Start background processing
+      setUploadStage("processing");
+      setUploadProgress("Processing health data (this may take a few minutes)...");
 
-      // Auto-set date range from health data if available
-      if (result.summary.dateRange) {
-        const start = new Date(result.summary.dateRange.start);
-        const end = new Date(result.summary.dateRange.end);
-        const sevenDaysAgo = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);
-        const effectiveStart = sevenDaysAgo > start ? sevenDaysAgo : start;
-        setEgvStartDate(effectiveStart.toISOString().slice(0, 19));
-        setEgvEndDate(end.toISOString().slice(0, 19));
-      }
+      const { jobId } = await startProcessing.mutateAsync({
+        s3Key: s3Result.s3Key,
+        s3Url: s3Result.s3Url,
+      });
 
-      healthStatus.refetch();
-      healthBuckets.refetch();
-      workouts.refetch();
+      setCurrentJobId(jobId);
+      // Polling will be handled by the jobStatus query with refetchInterval
+
     } catch (err: any) {
-      toast.error(err.message || "Failed to process Apple Health export");
-    } finally {
-      setUploading(false);
+      setUploadStage("error");
       setUploadProgress("");
+      toast.error(err.message || "Failed to upload Apple Health export");
+    } finally {
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
-  }, [healthStatus, healthBuckets, workouts]);
+  }, [startProcessing]);
 
   const handleCalculateCorrelations = useCallback(async () => {
     if (!egvQuery.data?.records?.length) {
@@ -218,6 +254,7 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
   const isConnected = dexcomStatus.data?.connected === true;
   const hasHealthData = healthStatus.data?.uploaded === true;
   const hasEgvData = !!egvQuery.data?.records?.length;
+  const isUploading = uploadStage === "uploading" || uploadStage === "processing";
 
   const filteredWorkouts = useMemo(() => {
     if (!workouts.data || !egvStartDate || !egvEndDate) return [];
@@ -250,10 +287,6 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
               <li>Scroll down and tap <strong>Export All Health Data</strong></li>
               <li>Save the ZIP file and upload it here</li>
             </ol>
-            <p className="text-yellow-400/80 mt-2">
-              <AlertTriangle className="w-3 h-3 inline mr-1" />
-              Large exports (100MB+) may take several minutes to process. If your hosting plan has limited memory, consider exporting a shorter date range.
-            </p>
           </div>
 
           <div className="flex items-center gap-3">
@@ -269,10 +302,10 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
               variant="outline"
               size="sm"
               onClick={() => fileInputRef.current?.click()}
-              disabled={uploading}
+              disabled={isUploading}
               className="font-mono text-xs"
             >
-              {uploading ? (
+              {isUploading ? (
                 <>
                   <Loader2 className="w-3 h-3 mr-1 animate-spin" />
                   {uploadProgress || "Processing..."}
@@ -285,7 +318,7 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
               )}
             </Button>
 
-            {hasHealthData && (
+            {hasHealthData && !isUploading && (
               <Button
                 variant="ghost"
                 size="sm"
@@ -297,6 +330,38 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
               </Button>
             )}
           </div>
+
+          {/* Processing status indicator */}
+          {uploadStage === "processing" && (
+            <div className="bg-blue-500/10 rounded-md p-3 border border-blue-500/20">
+              <div className="flex items-center gap-2 text-xs font-mono text-blue-400">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                <span>{uploadProgress}</span>
+              </div>
+              <div className="text-[10px] font-mono text-muted-foreground mt-1">
+                Your file has been uploaded to cloud storage. The server is now parsing the XML data
+                and saving results to the database. This page will update automatically when complete.
+              </div>
+            </div>
+          )}
+
+          {uploadStage === "done" && !hasHealthData && (
+            <div className="bg-green-500/10 rounded-md p-3 border border-green-500/20">
+              <div className="flex items-center gap-2 text-xs font-mono text-green-400">
+                <CheckCircle2 className="w-3 h-3" />
+                <span>Processing complete! Loading data...</span>
+              </div>
+            </div>
+          )}
+
+          {uploadStage === "error" && (
+            <div className="bg-red-500/10 rounded-md p-3 border border-red-500/20">
+              <div className="flex items-center gap-2 text-xs font-mono text-red-400">
+                <XCircle className="w-3 h-3" />
+                <span>Processing failed. Please try again with a smaller file.</span>
+              </div>
+            </div>
+          )}
 
           {/* Upload status */}
           {hasHealthData && healthStatus.data?.uploaded && (
@@ -615,7 +680,7 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
       )}
 
       {/* Empty state */}
-      {!hasHealthData && !uploading && (
+      {!hasHealthData && !isUploading && uploadStage !== "error" && (
         <div className="text-center py-12 text-muted-foreground font-mono text-sm">
           <FileArchive className="w-8 h-8 mx-auto mb-3 opacity-50" />
           <p>Upload your Apple Health export to get started</p>

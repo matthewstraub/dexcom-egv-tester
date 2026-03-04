@@ -1,4 +1,5 @@
 import { COOKIE_NAME, type DexcomEnv } from "@shared/const";
+import { eq, desc, and, gte, lte } from "drizzle-orm";
 import { z } from "zod";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
@@ -10,8 +11,18 @@ import {
   fetchDataRange,
   disconnectDexcom,
 } from "./dexcom";
-import { getLatestHealthData, clearHealthData } from "./appleHealthRoutes";
 import { pearsonCorrelation } from "./appleHealth";
+import { storagePut } from "./storage";
+import { getDb } from "./db";
+import {
+  healthUploadJobs,
+  healthBuckets,
+  healthWorkouts,
+} from "../drizzle/schema";
+import { processHealthUpload } from "./appleHealthProcessor";
+import { nanoid } from "nanoid";
+import type { AggregatedBucket, AppleHealthParseSummary } from "./appleHealth";
+import type { AppleHealthMetricKey } from "@shared/const";
 
 const dexcomEnvSchema = z.enum(["sandbox", "production"]);
 
@@ -124,44 +135,217 @@ export const appRouter = router({
   }),
 
   appleHealth: router({
-    /** Get the status of the latest Apple Health upload */
-    status: publicProcedure.query(() => {
-      const { summary, uploadedAt } = getLatestHealthData();
-      if (!summary || !uploadedAt) {
+    /**
+     * Step 1: Upload the ZIP file content and start processing.
+     * The frontend sends the file as a base64 string (chunked if needed),
+     * we upload it to S3, create a job, and start background processing.
+     *
+     * For very large files, the frontend should use the presigned upload flow instead.
+     */
+    getUploadUrl: publicProcedure.mutation(async () => {
+      // Generate a unique S3 key for this upload
+      const fileKey = `apple-health-uploads/${nanoid()}.zip`;
+
+      try {
+        // We'll use a two-step approach:
+        // 1. Return the S3 key to the frontend
+        // 2. Frontend uploads directly via the Express route (which streams to S3)
+        return {
+          fileKey,
+          uploadUrl: `/api/apple-health/upload-to-s3`,
+        };
+      } catch (err: any) {
+        throw new Error("Failed to prepare upload: " + (err.message || "Unknown error"));
+      }
+    }),
+
+    /**
+     * Step 2: Start processing a previously uploaded file.
+     * Creates a job record and kicks off background processing.
+     */
+    startProcessing: publicProcedure
+      .input(z.object({
+        s3Key: z.string(),
+        s3Url: z.string(),
+      }))
+      .mutation(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new Error("Database not available");
+
+        // Create the job record
+        const result = await db.insert(healthUploadJobs).values({
+          s3Key: input.s3Key,
+          s3Url: input.s3Url,
+          status: "pending",
+        });
+
+        const jobId = Number(result[0].insertId);
+
+        // Fire and forget — start processing in the background
+        // This allows the mutation to return immediately
+        processHealthUpload(jobId).catch((err) => {
+          console.error(`[AppleHealth] Background processing failed for job ${jobId}:`, err);
+        });
+
+        return { jobId };
+      }),
+
+    /**
+     * Poll the status of a processing job.
+     */
+    jobStatus: publicProcedure
+      .input(z.object({ jobId: z.number() }))
+      .query(async ({ input }) => {
+        const db = await getDb();
+        if (!db) throw new Error("Database not available");
+
+        const [job] = await db
+          .select()
+          .from(healthUploadJobs)
+          .where(eq(healthUploadJobs.id, input.jobId))
+          .limit(1);
+
+        if (!job) {
+          return { status: "not_found" as const };
+        }
+
+        return {
+          status: job.status as "pending" | "processing" | "completed" | "failed",
+          errorMessage: job.errorMessage,
+          summary: job.status === "completed" ? {
+            totalRecordsScanned: job.totalRecordsScanned || 0,
+            relevantDataPoints: job.relevantDataPoints || 0,
+            workoutCount: job.workoutCount || 0,
+            metricsFound: job.metricsFound ? job.metricsFound.split(",") : [],
+            dateRange: job.dataRangeStart && job.dataRangeEnd ? {
+              start: job.dataRangeStart,
+              end: job.dataRangeEnd,
+            } : null,
+            bucketCount: job.bucketCount || 0,
+          } : null,
+        };
+      }),
+
+    /**
+     * Get the status of the latest completed upload.
+     * Returns data from the most recent completed job in the database.
+     */
+    status: publicProcedure.query(async () => {
+      const db = await getDb();
+      if (!db) return { uploaded: false as const };
+
+      const [job] = await db
+        .select()
+        .from(healthUploadJobs)
+        .where(eq(healthUploadJobs.status, "completed"))
+        .orderBy(desc(healthUploadJobs.createdAt))
+        .limit(1);
+
+      if (!job) {
         return { uploaded: false as const };
       }
+
       return {
         uploaded: true as const,
-        uploadedAt,
+        jobId: job.id,
+        uploadedAt: job.createdAt.toISOString(),
         summary: {
-          totalRecordsScanned: summary.recordCount,
-          relevantDataPoints: summary.relevantDataPoints,
-          workoutCount: summary.workouts.length,
-          metricsFound: summary.metricsFound,
-          dateRange: summary.dateRange
-            ? {
-                start: summary.dateRange.start.toISOString(),
-                end: summary.dateRange.end.toISOString(),
-              }
-            : null,
+          totalRecordsScanned: job.totalRecordsScanned || 0,
+          relevantDataPoints: job.relevantDataPoints || 0,
+          workoutCount: job.workoutCount || 0,
+          metricsFound: job.metricsFound ? job.metricsFound.split(",") : [],
+          dateRange: job.dataRangeStart && job.dataRangeEnd ? {
+            start: job.dataRangeStart,
+            end: job.dataRangeEnd,
+          } : null,
         },
       };
     }),
 
-    /** Get aggregated health data buckets for chart overlay */
-    buckets: publicProcedure.query(() => {
-      const { buckets } = getLatestHealthData();
-      return buckets || [];
+    /**
+     * Get aggregated health data buckets from the latest completed job.
+     * Reconstructs the AggregatedBucket[] format from the database rows.
+     */
+    buckets: publicProcedure.query(async () => {
+      const db = await getDb();
+      if (!db) return [];
+
+      // Get the latest completed job
+      const [job] = await db
+        .select()
+        .from(healthUploadJobs)
+        .where(eq(healthUploadJobs.status, "completed"))
+        .orderBy(desc(healthUploadJobs.createdAt))
+        .limit(1);
+
+      if (!job) return [];
+
+      // Get all bucket rows for this job
+      const rows = await db
+        .select()
+        .from(healthBuckets)
+        .where(eq(healthBuckets.jobId, job.id));
+
+      // Reconstruct AggregatedBucket[] from flat rows
+      const bucketMap = new Map<string, AggregatedBucket>();
+
+      for (const row of rows) {
+        if (!bucketMap.has(row.bucketStart)) {
+          bucketMap.set(row.bucketStart, {
+            bucketStart: row.bucketStart,
+            bucketEnd: row.bucketEnd,
+            metrics: {},
+          });
+        }
+        const bucket = bucketMap.get(row.bucketStart)!;
+        (bucket.metrics as any)[row.metric] = {
+          avg: parseFloat(row.avg),
+          min: parseFloat(row.min),
+          max: parseFloat(row.max),
+          sum: parseFloat(row.sum),
+          count: row.count,
+        };
+      }
+
+      // Sort by bucket start time
+      return Array.from(bucketMap.values()).sort(
+        (a, b) => new Date(a.bucketStart).getTime() - new Date(b.bucketStart).getTime()
+      );
     }),
 
-    /** Get workout records */
-    workouts: publicProcedure.query(() => {
-      const { summary } = getLatestHealthData();
-      if (!summary) return [];
-      return summary.workouts.map((w: typeof summary.workouts[number]) => ({
-        ...w,
-        startDate: w.startDate.toISOString(),
-        endDate: w.endDate.toISOString(),
+    /**
+     * Get workout records from the latest completed job.
+     */
+    workouts: publicProcedure.query(async () => {
+      const db = await getDb();
+      if (!db) return [];
+
+      // Get the latest completed job
+      const [job] = await db
+        .select()
+        .from(healthUploadJobs)
+        .where(eq(healthUploadJobs.status, "completed"))
+        .orderBy(desc(healthUploadJobs.createdAt))
+        .limit(1);
+
+      if (!job) return [];
+
+      const rows = await db
+        .select()
+        .from(healthWorkouts)
+        .where(eq(healthWorkouts.jobId, job.id));
+
+      return rows.map((w) => ({
+        activityType: w.activityType,
+        activityLabel: w.activityLabel,
+        duration: parseFloat(w.duration),
+        totalDistance: w.totalDistance ? parseFloat(w.totalDistance) : null,
+        distanceUnit: w.distanceUnit,
+        totalEnergyBurned: w.totalEnergyBurned ? parseFloat(w.totalEnergyBurned) : null,
+        energyUnit: w.energyUnit,
+        startDate: w.startDate,
+        endDate: w.endDate,
+        sourceName: w.sourceName,
       }));
     }),
 
@@ -177,11 +361,49 @@ export const appRouter = router({
           ),
         })
       )
-      .mutation(({ input }) => {
-        const { buckets } = getLatestHealthData();
-        if (!buckets || buckets.length === 0) {
-          return { correlations: [] };
+      .mutation(async ({ input }) => {
+        const db = await getDb();
+        if (!db) return { correlations: [] };
+
+        // Get the latest completed job
+        const [job] = await db
+          .select()
+          .from(healthUploadJobs)
+          .where(eq(healthUploadJobs.status, "completed"))
+          .orderBy(desc(healthUploadJobs.createdAt))
+          .limit(1);
+
+        if (!job) return { correlations: [] };
+
+        // Get bucket data from DB
+        const rows = await db
+          .select()
+          .from(healthBuckets)
+          .where(eq(healthBuckets.jobId, job.id));
+
+        if (rows.length === 0) return { correlations: [] };
+
+        // Reconstruct buckets
+        const bucketMap = new Map<string, AggregatedBucket>();
+        for (const row of rows) {
+          if (!bucketMap.has(row.bucketStart)) {
+            bucketMap.set(row.bucketStart, {
+              bucketStart: row.bucketStart,
+              bucketEnd: row.bucketEnd,
+              metrics: {},
+            });
+          }
+          const bucket = bucketMap.get(row.bucketStart)!;
+          (bucket.metrics as any)[row.metric] = {
+            avg: parseFloat(row.avg),
+            min: parseFloat(row.min),
+            max: parseFloat(row.max),
+            sum: parseFloat(row.sum),
+            count: row.count,
+          };
         }
+
+        const buckets = Array.from(bucketMap.values());
 
         // Build a map of bucket start times to EGV values
         const egvByTime = new Map<number, number[]>();
@@ -257,9 +479,16 @@ export const appRouter = router({
         return { correlations };
       }),
 
-    /** Clear the uploaded Apple Health data */
-    clear: publicProcedure.mutation(() => {
-      clearHealthData();
+    /** Clear all Apple Health data (delete all jobs, buckets, workouts) */
+    clear: publicProcedure.mutation(async () => {
+      const db = await getDb();
+      if (!db) return { success: true };
+
+      // Delete all data in reverse dependency order
+      await db.delete(healthBuckets);
+      await db.delete(healthWorkouts);
+      await db.delete(healthUploadJobs);
+
       return { success: true };
     }),
   }),
