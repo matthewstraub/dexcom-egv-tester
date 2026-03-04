@@ -1,0 +1,9 @@
+Render Settings (2026-03-04):
+- Build Command: pnpm install --frozen-lockfile; pnpm run build
+- Pre-Deploy Command: (empty)
+- Start Command: pnpm run start
+- Auto-Deploy: On Commit
+
+Root cause: The Pre-Deploy Command is EMPTY. This means `pnpm db:push` (which runs drizzle-kit generate + migrate) is NEVER executed against the production database. The health tables were created in the Manus sandbox DB but never in the production TiDB database.
+
+Fix: Add `pnpm db:push` to the Pre-Deploy Command field in Render settings. This will run migrations before each deploy, creating the missing health tables.

@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useMemo, useEffect } from "react";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
 import {
   Upload,
@@ -22,6 +23,7 @@ import {
   Clock,
   CheckCircle2,
   XCircle,
+  Cpu,
 } from "lucide-react";
 import {
   type AppleHealthMetricKey,
@@ -48,18 +50,18 @@ const METRIC_ICONS: Record<AppleHealthMetricKey, typeof Heart> = {
   oxygenSaturation: Activity,
 };
 
-type UploadStage = "idle" | "uploading" | "processing" | "done" | "error";
+type UploadStage = "idle" | "extracting" | "parsing" | "saving" | "done" | "error";
 
 export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps) {
   const [uploadStage, setUploadStage] = useState<UploadStage>("idle");
-  const [uploadProgress, setUploadProgress] = useState("");
-  const [currentJobId, setCurrentJobId] = useState<number | null>(null);
+  const [progressDetail, setProgressDetail] = useState("");
+  const [progressPct, setProgressPct] = useState(0);
   const [selectedMetrics, setSelectedMetrics] = useState<AppleHealthMetricKey[]>(["heartRate", "stepCount"]);
   const [egvStartDate, setEgvStartDate] = useState("");
   const [egvEndDate, setEgvEndDate] = useState("");
   const [correlating, setCorrelating] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const workerRef = useRef<Worker | null>(null);
 
   // Queries
   const healthStatus = trpc.appleHealth.status.useQuery();
@@ -71,51 +73,8 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
   });
   const dexcomStatus = trpc.dexcom.status.useQuery({ env: dexcomEnv });
 
-  // Job status polling
-  const jobStatus = trpc.appleHealth.jobStatus.useQuery(
-    { jobId: currentJobId! },
-    {
-      enabled: currentJobId !== null && (uploadStage === "processing"),
-      refetchInterval: 2000, // Poll every 2 seconds
-    }
-  );
-
-  // React to job status changes
-  useEffect(() => {
-    if (!jobStatus.data || uploadStage !== "processing") return;
-
-    if (jobStatus.data.status === "completed") {
-      setUploadStage("done");
-      setUploadProgress("");
-      setCurrentJobId(null);
-
-      // Refetch health data
-      healthStatus.refetch();
-      healthBuckets.refetch();
-      workouts.refetch();
-
-      // Auto-set date range
-      if (jobStatus.data.summary?.dateRange) {
-        const start = new Date(jobStatus.data.summary.dateRange.start);
-        const end = new Date(jobStatus.data.summary.dateRange.end);
-        const sevenDaysAgo = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);
-        const effectiveStart = sevenDaysAgo > start ? sevenDaysAgo : start;
-        setEgvStartDate(effectiveStart.toISOString().slice(0, 19));
-        setEgvEndDate(end.toISOString().slice(0, 19));
-      }
-
-      toast.success(
-        `Parsed ${jobStatus.data.summary?.relevantDataPoints.toLocaleString()} data points and ${jobStatus.data.summary?.workoutCount} workouts`
-      );
-    } else if (jobStatus.data.status === "failed") {
-      setUploadStage("error");
-      setUploadProgress("");
-      setCurrentJobId(null);
-      toast.error(jobStatus.data.errorMessage || "Processing failed");
-    }
-  }, [jobStatus.data, uploadStage]);
-
   // Mutations
+  const saveResultsMutation = trpc.appleHealth.saveResults.useMutation();
   const correlationMutation = trpc.appleHealth.correlations.useMutation();
   const clearMutation = trpc.appleHealth.clear.useMutation({
     onSuccess: () => {
@@ -132,6 +91,16 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
     { enabled: !!egvStartDate && !!egvEndDate && dexcomStatus.data?.connected === true }
   );
 
+  // Cleanup worker on unmount
+  useEffect(() => {
+    return () => {
+      if (workerRef.current) {
+        workerRef.current.terminate();
+        workerRef.current = null;
+      }
+    };
+  }, []);
+
   const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -142,80 +111,109 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
     }
 
     const sizeMB = file.size / 1024 / 1024;
-    if (sizeMB > 500) {
-      toast.error("File too large (max 500 MB). Try exporting a shorter date range from Apple Health.");
+    if (sizeMB > 2000) {
+      toast.error("File too large (max 2 GB).");
       return;
     }
 
-    setUploadStage("uploading");
-    setUploadProgress(`Uploading ${sizeMB.toFixed(0)} MB...`);
+    setUploadStage("extracting");
+    setProgressDetail(`Reading ${sizeMB.toFixed(0)} MB ZIP file...`);
+    setProgressPct(0);
 
     try {
-      // Upload the ZIP to the server, which saves to temp file and starts
-      // background processing. Returns immediately with a job ID.
-      const uploadResult = await new Promise<{ jobId: number }>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.timeout = 10 * 60 * 1000; // 10 minutes for upload
+      // Create a Web Worker for parsing
+      const worker = new Worker(
+        new URL("../workers/appleHealthWorker.ts", import.meta.url),
+        { type: "module" }
+      );
+      workerRef.current = worker;
 
-        xhr.upload.addEventListener("progress", (event) => {
-          if (event.lengthComputable) {
-            const pct = Math.round((event.loaded / event.total) * 100);
-            setUploadProgress(
-              pct < 100
-                ? `Uploading... ${pct}%`
-                : "Upload complete, starting processing..."
-            );
-          }
-        });
+      const result = await new Promise<{
+        summary: any;
+        buckets: any[];
+        workouts: any[];
+      }>((resolve, reject) => {
+        worker.onmessage = (event) => {
+          const msg = event.data;
 
-        xhr.addEventListener("load", () => {
-          const contentType = xhr.getResponseHeader("content-type") || "";
-          if (!contentType.includes("application/json")) {
-            reject(new Error(
-              `Server returned unexpected response (${xhr.status}). ` +
-              "This may be a timeout or memory issue. Try a smaller export."
-            ));
-            return;
-          }
-          try {
-            const data = JSON.parse(xhr.responseText);
-            if (xhr.status >= 200 && xhr.status < 300 && data.success) {
-              resolve({ jobId: data.jobId });
-            } else {
-              reject(new Error(data.error || `Upload failed (HTTP ${xhr.status})`));
+          if (msg.type === "progress") {
+            setUploadStage(msg.stage === "extracting" ? "extracting" : "parsing");
+            setProgressDetail(msg.detail);
+            if (msg.pct !== undefined) {
+              setProgressPct(msg.pct);
             }
-          } catch {
-            reject(new Error("Failed to parse server response"));
+          } else if (msg.type === "result") {
+            resolve({
+              summary: msg.summary,
+              buckets: msg.buckets,
+              workouts: msg.workouts,
+            });
+          } else if (msg.type === "error") {
+            reject(new Error(msg.message));
           }
-        });
+        };
 
-        xhr.addEventListener("error", () => {
-          reject(new Error("Network error during upload"));
-        });
+        worker.onerror = (err) => {
+          reject(new Error(err.message || "Worker error"));
+        };
 
-        xhr.addEventListener("timeout", () => {
-          reject(new Error("Upload timed out. Try a smaller file."));
-        });
-
-        xhr.open("POST", "/api/apple-health/upload");
-        xhr.setRequestHeader("Content-Type", "application/octet-stream");
-        xhr.send(file);
+        // Start parsing
+        worker.postMessage({ type: "parse", file });
       });
 
-      // Switch to processing stage — the server is now parsing in the background
-      setUploadStage("processing");
-      setUploadProgress("Processing health data (this may take a few minutes)...");
-      setCurrentJobId(uploadResult.jobId);
-      // Polling will be handled by the jobStatus query with refetchInterval
+      // Terminate the worker
+      worker.terminate();
+      workerRef.current = null;
 
+      // Stage 3: Save results to server
+      setUploadStage("saving");
+      setProgressDetail(
+        `Saving ${result.buckets.length.toLocaleString()} buckets and ${result.workouts.length} workouts to database...`
+      );
+      setProgressPct(95);
+
+      await saveResultsMutation.mutateAsync({
+        summary: result.summary,
+        buckets: result.buckets,
+        workouts: result.workouts,
+      });
+
+      setUploadStage("done");
+      setProgressDetail("");
+      setProgressPct(100);
+
+      // Refetch health data
+      healthStatus.refetch();
+      healthBuckets.refetch();
+      workouts.refetch();
+
+      // Auto-set date range
+      if (result.summary.dateRange) {
+        const start = new Date(result.summary.dateRange.start);
+        const end = new Date(result.summary.dateRange.end);
+        const sevenDaysAgo = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);
+        const effectiveStart = sevenDaysAgo > start ? sevenDaysAgo : start;
+        setEgvStartDate(effectiveStart.toISOString().slice(0, 19));
+        setEgvEndDate(end.toISOString().slice(0, 19));
+      }
+
+      toast.success(
+        `Parsed ${result.summary.relevantDataPoints.toLocaleString()} data points and ${result.summary.workoutCount} workouts`
+      );
     } catch (err: any) {
       setUploadStage("error");
-      setUploadProgress("");
-      toast.error(err.message || "Failed to upload Apple Health export");
+      setProgressDetail(err.message || "");
+      toast.error(err.message || "Failed to parse Apple Health export");
+
+      // Cleanup worker
+      if (workerRef.current) {
+        workerRef.current.terminate();
+        workerRef.current = null;
+      }
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
-  }, []);
+  }, [saveResultsMutation]);
 
   const handleCalculateCorrelations = useCallback(async () => {
     if (!egvQuery.data?.records?.length) {
@@ -248,7 +246,7 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
   const isConnected = dexcomStatus.data?.connected === true;
   const hasHealthData = healthStatus.data?.uploaded === true;
   const hasEgvData = !!egvQuery.data?.records?.length;
-  const isUploading = uploadStage === "uploading" || uploadStage === "processing";
+  const isProcessing = uploadStage === "extracting" || uploadStage === "parsing" || uploadStage === "saving";
 
   const filteredWorkouts = useMemo(() => {
     if (!workouts.data || !egvStartDate || !egvEndDate) return [];
@@ -281,6 +279,10 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
               <li>Scroll down and tap <strong>Export All Health Data</strong></li>
               <li>Save the ZIP file and upload it here</li>
             </ol>
+            <div className="flex items-center gap-1.5 mt-2 text-blue-400">
+              <Cpu className="w-3 h-3" />
+              <span>Files are parsed locally in your browser — nothing is uploaded to the server until parsing is complete.</span>
+            </div>
           </div>
 
           <div className="flex items-center gap-3">
@@ -296,13 +298,13 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
               variant="outline"
               size="sm"
               onClick={() => fileInputRef.current?.click()}
-              disabled={isUploading}
+              disabled={isProcessing}
               className="font-mono text-xs"
             >
-              {isUploading ? (
+              {isProcessing ? (
                 <>
                   <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-                  {uploadProgress || "Processing..."}
+                  Processing...
                 </>
               ) : (
                 <>
@@ -312,7 +314,7 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
               )}
             </Button>
 
-            {hasHealthData && !isUploading && (
+            {hasHealthData && !isProcessing && (
               <Button
                 variant="ghost"
                 size="sm"
@@ -326,15 +328,19 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
           </div>
 
           {/* Processing status indicator */}
-          {uploadStage === "processing" && (
-            <div className="bg-blue-500/10 rounded-md p-3 border border-blue-500/20">
+          {isProcessing && (
+            <div className="bg-blue-500/10 rounded-md p-3 border border-blue-500/20 space-y-2">
               <div className="flex items-center gap-2 text-xs font-mono text-blue-400">
                 <Loader2 className="w-3 h-3 animate-spin" />
-                <span>{uploadProgress}</span>
+                <span>
+                  {uploadStage === "extracting" && "Extracting XML from ZIP..."}
+                  {uploadStage === "parsing" && "Parsing health data..."}
+                  {uploadStage === "saving" && "Saving results to database..."}
+                </span>
               </div>
-              <div className="text-[10px] font-mono text-muted-foreground mt-1">
-                Your file has been uploaded to cloud storage. The server is now parsing the XML data
-                and saving results to the database. This page will update automatically when complete.
+              <Progress value={progressPct} className="h-1.5" />
+              <div className="text-[10px] font-mono text-muted-foreground">
+                {progressDetail}
               </div>
             </div>
           )}
@@ -352,7 +358,7 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
             <div className="bg-red-500/10 rounded-md p-3 border border-red-500/20">
               <div className="flex items-center gap-2 text-xs font-mono text-red-400">
                 <XCircle className="w-3 h-3" />
-                <span>Processing failed. Please try again with a smaller file.</span>
+                <span>{progressDetail || "Processing failed. Please try again."}</span>
               </div>
             </div>
           )}
@@ -674,7 +680,7 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
       )}
 
       {/* Empty state */}
-      {!hasHealthData && !isUploading && uploadStage !== "error" && (
+      {!hasHealthData && !isProcessing && uploadStage !== "error" && (
         <div className="text-center py-12 text-muted-foreground font-mono text-sm">
           <FileArchive className="w-8 h-8 mx-auto mb-3 opacity-50" />
           <p>Upload your Apple Health export to get started</p>

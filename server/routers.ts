@@ -1,5 +1,5 @@
 import { COOKIE_NAME, type DexcomEnv } from "@shared/const";
-import { eq, desc, and, gte, lte } from "drizzle-orm";
+import { eq, desc } from "drizzle-orm";
 import { z } from "zod";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
@@ -12,15 +12,13 @@ import {
   disconnectDexcom,
 } from "./dexcom";
 import { pearsonCorrelation } from "./appleHealth";
-// S3 storage no longer needed — uploads go to temp file on disk
 import { getDb } from "./db";
 import {
   healthUploadJobs,
   healthBuckets,
   healthWorkouts,
 } from "../drizzle/schema";
-// processHealthUpload is called from the Express route, not from tRPC
-import type { AggregatedBucket, AppleHealthParseSummary } from "./appleHealth";
+import type { AggregatedBucket } from "./appleHealth";
 import type { AppleHealthMetricKey } from "@shared/const";
 
 const dexcomEnvSchema = z.enum(["sandbox", "production"]);
@@ -30,6 +28,8 @@ const dexcomEnvSchema = z.enum(["sandbox", "production"]);
  * No authentication is required — the app is publicly accessible.
  */
 const SINGLE_USER_ID = 1;
+
+const BUCKET_BATCH_SIZE = 500;
 
 export const appRouter = router({
   system: systemRouter,
@@ -135,44 +135,143 @@ export const appRouter = router({
 
   appleHealth: router({
     /**
-     * Poll the status of a processing job.
+     * Save parsed results from the client-side Web Worker.
+     * The browser does all the heavy XML parsing; this just persists the results.
      */
-    jobStatus: publicProcedure
-      .input(z.object({ jobId: z.number() }))
-      .query(async ({ input }) => {
+    saveResults: publicProcedure
+      .input(
+        z.object({
+          summary: z.object({
+            recordCount: z.number(),
+            relevantDataPoints: z.number(),
+            workoutCount: z.number(),
+            metricsFound: z.array(z.string()),
+            dateRange: z.object({
+              start: z.string(),
+              end: z.string(),
+            }).nullable(),
+            bucketCount: z.number(),
+          }),
+          buckets: z.array(
+            z.object({
+              bucketStart: z.string(),
+              bucketEnd: z.string(),
+              metrics: z.record(
+                z.string(),
+                z.object({
+                  avg: z.number(),
+                  min: z.number(),
+                  max: z.number(),
+                  sum: z.number(),
+                  count: z.number(),
+                })
+              ),
+            })
+          ),
+          workouts: z.array(
+            z.object({
+              activityType: z.string(),
+              activityLabel: z.string(),
+              duration: z.number(),
+              totalDistance: z.number().nullable(),
+              distanceUnit: z.string().nullable(),
+              totalEnergyBurned: z.number().nullable(),
+              energyUnit: z.string().nullable(),
+              startDate: z.string(),
+              endDate: z.string(),
+              sourceName: z.string(),
+            })
+          ),
+        })
+      )
+      .mutation(async ({ input }) => {
         const db = await getDb();
         if (!db) throw new Error("Database not available");
 
-        const [job] = await db
-          .select()
-          .from(healthUploadJobs)
-          .where(eq(healthUploadJobs.id, input.jobId))
-          .limit(1);
+        // Create a completed job record
+        const result = await db.insert(healthUploadJobs).values({
+          fileRef: "client-parsed",
+          status: "completed",
+          totalRecordsScanned: input.summary.recordCount,
+          relevantDataPoints: input.summary.relevantDataPoints,
+          workoutCount: input.summary.workoutCount,
+          metricsFound: input.summary.metricsFound.join(","),
+          dataRangeStart: input.summary.dateRange?.start || null,
+          dataRangeEnd: input.summary.dateRange?.end || null,
+          bucketCount: input.summary.bucketCount,
+        });
 
-        if (!job) {
-          return { status: "not_found" as const };
+        const jobId = Number(result[0].insertId);
+
+        // Write buckets in batches
+        const bucketRows: Array<{
+          jobId: number;
+          bucketStart: string;
+          bucketEnd: string;
+          metric: string;
+          avg: string;
+          min: string;
+          max: string;
+          sum: string;
+          count: number;
+        }> = [];
+
+        for (const bucket of input.buckets) {
+          for (const [metric, stats] of Object.entries(bucket.metrics)) {
+            if (!stats) continue;
+            bucketRows.push({
+              jobId,
+              bucketStart: bucket.bucketStart,
+              bucketEnd: bucket.bucketEnd,
+              metric,
+              avg: String(stats.avg),
+              min: String(stats.min),
+              max: String(stats.max),
+              sum: String(stats.sum),
+              count: stats.count,
+            });
+          }
+        }
+
+        for (let i = 0; i < bucketRows.length; i += BUCKET_BATCH_SIZE) {
+          const batch = bucketRows.slice(i, i + BUCKET_BATCH_SIZE);
+          if (batch.length > 0) {
+            await db.insert(healthBuckets).values(batch);
+          }
+        }
+
+        // Write workouts in batches
+        if (input.workouts.length > 0) {
+          const workoutRows = input.workouts.map((w) => ({
+            jobId,
+            activityType: w.activityType,
+            activityLabel: w.activityLabel,
+            duration: String(w.duration),
+            totalDistance: w.totalDistance !== null ? String(w.totalDistance) : null,
+            distanceUnit: w.distanceUnit,
+            totalEnergyBurned: w.totalEnergyBurned !== null ? String(w.totalEnergyBurned) : null,
+            energyUnit: w.energyUnit,
+            startDate: w.startDate,
+            endDate: w.endDate,
+            sourceName: w.sourceName || null,
+          }));
+
+          for (let i = 0; i < workoutRows.length; i += 100) {
+            const batch = workoutRows.slice(i, i + 100);
+            await db.insert(healthWorkouts).values(batch);
+          }
         }
 
         return {
-          status: job.status as "pending" | "processing" | "completed" | "failed",
-          errorMessage: job.errorMessage,
-          summary: job.status === "completed" ? {
-            totalRecordsScanned: job.totalRecordsScanned || 0,
-            relevantDataPoints: job.relevantDataPoints || 0,
-            workoutCount: job.workoutCount || 0,
-            metricsFound: job.metricsFound ? job.metricsFound.split(",") : [],
-            dateRange: job.dataRangeStart && job.dataRangeEnd ? {
-              start: job.dataRangeStart,
-              end: job.dataRangeEnd,
-            } : null,
-            bucketCount: job.bucketCount || 0,
-          } : null,
+          success: true,
+          jobId,
+          bucketRowsWritten: bucketRows.length,
+          workoutsWritten: input.workouts.length,
         };
       }),
 
     /**
      * Get the status of the latest completed upload.
-     * Returns data from the most recent completed job in the database.
      */
     status: publicProcedure.query(async () => {
       const db = await getDb();
@@ -208,13 +307,11 @@ export const appRouter = router({
 
     /**
      * Get aggregated health data buckets from the latest completed job.
-     * Reconstructs the AggregatedBucket[] format from the database rows.
      */
     buckets: publicProcedure.query(async () => {
       const db = await getDb();
       if (!db) return [];
 
-      // Get the latest completed job
       const [job] = await db
         .select()
         .from(healthUploadJobs)
@@ -224,13 +321,11 @@ export const appRouter = router({
 
       if (!job) return [];
 
-      // Get all bucket rows for this job
       const rows = await db
         .select()
         .from(healthBuckets)
         .where(eq(healthBuckets.jobId, job.id));
 
-      // Reconstruct AggregatedBucket[] from flat rows
       const bucketMap = new Map<string, AggregatedBucket>();
 
       for (const row of rows) {
@@ -251,7 +346,6 @@ export const appRouter = router({
         };
       }
 
-      // Sort by bucket start time
       return Array.from(bucketMap.values()).sort(
         (a, b) => new Date(a.bucketStart).getTime() - new Date(b.bucketStart).getTime()
       );
@@ -264,7 +358,6 @@ export const appRouter = router({
       const db = await getDb();
       if (!db) return [];
 
-      // Get the latest completed job
       const [job] = await db
         .select()
         .from(healthUploadJobs)
@@ -309,7 +402,6 @@ export const appRouter = router({
         const db = await getDb();
         if (!db) return { correlations: [] };
 
-        // Get the latest completed job
         const [job] = await db
           .select()
           .from(healthUploadJobs)
@@ -319,7 +411,6 @@ export const appRouter = router({
 
         if (!job) return { correlations: [] };
 
-        // Get bucket data from DB
         const rows = await db
           .select()
           .from(healthBuckets)
@@ -351,7 +442,7 @@ export const appRouter = router({
 
         // Build a map of bucket start times to EGV values
         const egvByTime = new Map<number, number[]>();
-        const bucketMs = 15 * 60 * 1000; // 15-minute buckets
+        const bucketMs = 15 * 60 * 1000;
 
         for (const egv of input.egvData) {
           if (egv.value === null) continue;
@@ -394,7 +485,6 @@ export const appRouter = router({
             const avgEgv = egvs.reduce((a: number, b: number) => a + b, 0) / egvs.length;
             egvValues.push(avgEgv);
 
-            // Use avg for rate metrics (heart rate, HRV), sum for cumulative (steps, energy)
             const useSumMetrics = ["stepCount", "activeEnergy", "exerciseTime", "distance"];
             metricValues.push(useSumMetrics.includes(metric) ? metricData.sum : metricData.avg);
           }
@@ -417,18 +507,16 @@ export const appRouter = router({
           }
         }
 
-        // Sort by absolute correlation strength
         correlations.sort((a, b) => Math.abs(b.correlation) - Math.abs(a.correlation));
 
         return { correlations };
       }),
 
-    /** Clear all Apple Health data (delete all jobs, buckets, workouts) */
+    /** Clear all Apple Health data */
     clear: publicProcedure.mutation(async () => {
       const db = await getDb();
       if (!db) return { success: true };
 
-      // Delete all data in reverse dependency order
       await db.delete(healthBuckets);
       await db.delete(healthWorkouts);
       await db.delete(healthUploadJobs);

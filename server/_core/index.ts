@@ -5,7 +5,6 @@ import net from "net";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
 import { registerDexcomRoutes } from "../dexcomRoutes";
-import { registerAppleHealthRoutes } from "../appleHealthRoutes";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
@@ -32,11 +31,6 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 async function startServer() {
   const app = express();
   const server = createServer(app);
-
-  // Apple Health upload route MUST be registered BEFORE body parsers.
-  // The upload sends raw binary (application/octet-stream) which express.json()
-  // would attempt to parse and consume, leaving the stream empty for our handler.
-  registerAppleHealthRoutes(app);
 
   // Configure body parser with larger size limit for other routes
   app.use(express.json({ limit: "50mb" }));

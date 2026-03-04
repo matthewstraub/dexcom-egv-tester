@@ -1,0 +1,6 @@
+Render Settings for dexcom-egv-tester:
+- Build Command: pnpm install --frozen-lockfile; pnpm run build
+- Pre-Deploy Command: (empty) - index 50 is the input, index 51 is the Edit button
+- Start Command: pnpm run start
+- The Edit button for Pre-Deploy is at index 51
+- The input field for Pre-Deploy is at index 50

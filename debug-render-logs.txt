@@ -1,0 +1,24 @@
+Render Logs - HealthProcessor (filtered)
+=========================================
+
+Job 1 (02:32:07 PM):
+- Starting job 1: reading from /tmp/apple-health-amLBNhCeqXL2hMRAn1cA9.zip
+- File size: 102.16 MB
+- Extracting XML from ZIP...
+- Parsing XML with on-the-fly aggregation...
+- NO FURTHER LOG ENTRIES (no completion, no error, no progress)
+
+Job 2 (02:33:22 PM):
+- Starting job 2: reading from /tmp/apple-health-QK8LKq52YeygysTjRpGOi.zip
+- File size: 102.16 MB
+- Extracting XML from ZIP...
+- Parsing XML with on-the-fly aggregation...
+- NO FURTHER LOG ENTRIES (no completion, no error, no progress)
+
+Key observations:
+1. Both jobs start parsing but NEVER complete or error
+2. No "Parsed X records" progress logs appear
+3. No "Job completed" or "Job failed" messages
+4. The "[Auth] Missing session cookie" messages every 2-3 seconds are the frontend polling for job status
+5. The parser appears to hang or the process gets killed silently (likely OOM on 512MB Render)
+6. 102MB ZIP = likely 3-5GB uncompressed XML, which even with streaming SAX may exceed 512MB during parsing

@@ -67,3 +67,10 @@
 - [x] Keep database persistence for parsed results (buckets, workouts, job status)
 - [x] Fix production DB migration: old s3Key/s3Url columns conflict with new fileRef column
 - [x] Clean up migration files: consolidated into single clean migration 0003_first_brood.sql
+- [x] Debug 'Processing failed' error on Render when uploading Apple Health ZIP
+- [x] Move Apple Health XML parsing to browser via Web Worker (fix OOM on Render 512MB)
+- [x] Build Web Worker: ZIP extraction + regex parsing + on-the-fly aggregation in browser
+- [x] Add progress reporting from Web Worker to UI
+- [x] Update Correlations page to use Web Worker instead of server upload
+- [x] Simplify server: replace file upload with tRPC saveResults mutation
+- [x] Remove server-side file upload route and processor (appleHealthRoutes.ts, appleHealthProcessor.ts)
