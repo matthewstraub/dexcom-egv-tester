@@ -24,6 +24,7 @@ import {
   CheckCircle2,
   XCircle,
   Cpu,
+  Play,
 } from "lucide-react";
 import {
   type AppleHealthMetricKey,
@@ -60,6 +61,8 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
   const [egvStartDate, setEgvStartDate] = useState("");
   const [egvEndDate, setEgvEndDate] = useState("");
   const [correlating, setCorrelating] = useState(false);
+  // Track whether the user has explicitly applied the date range
+  const [appliedRange, setAppliedRange] = useState<{ start: string; end: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const workerRef = useRef<Worker | null>(null);
 
@@ -82,14 +85,15 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
       healthStatus.refetch();
       healthBuckets.refetch();
       workouts.refetch();
+      setAppliedRange(null);
       toast.success("Apple Health data cleared");
     },
   });
 
-  // EGV data for the selected date range
+  // EGV data — only fetch when user has explicitly applied a range
   const egvQuery = trpc.dexcom.egvs.useQuery(
-    { startDate: egvStartDate, endDate: egvEndDate, env: dexcomEnv },
-    { enabled: !!egvStartDate && !!egvEndDate && dexcomStatus.data?.connected === true }
+    { startDate: appliedRange?.start || "", endDate: appliedRange?.end || "", env: dexcomEnv },
+    { enabled: !!appliedRange && dexcomStatus.data?.connected === true }
   );
 
   // Cleanup worker on unmount
@@ -205,7 +209,7 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
       healthBuckets.refetch();
       workouts.refetch();
 
-      // Auto-set date range
+      // Auto-set date range to last 7 days of data
       if (result.summary.dateRange) {
         const start = new Date(result.summary.dateRange.start);
         const end = new Date(result.summary.dateRange.end);
@@ -232,6 +236,19 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   }, [saveResultsMutation]);
+
+  const handleApplyRange = useCallback(() => {
+    if (!egvStartDate || !egvEndDate) {
+      toast.error("Please select both start and end dates.");
+      return;
+    }
+    if (new Date(egvStartDate) >= new Date(egvEndDate)) {
+      toast.error("Start date must be before end date.");
+      return;
+    }
+    // Set the applied range, which triggers the EGV query
+    setAppliedRange({ start: egvStartDate, end: egvEndDate });
+  }, [egvStartDate, egvEndDate]);
 
   const handleCalculateCorrelations = useCallback(async () => {
     if (!egvQuery.data?.records?.length) {
@@ -265,16 +282,19 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
   const hasHealthData = healthStatus.data?.uploaded === true;
   const hasEgvData = !!egvQuery.data?.records?.length;
   const isProcessing = uploadStage === "extracting" || uploadStage === "parsing" || uploadStage === "saving";
+  const isEgvLoading = egvQuery.isLoading || egvQuery.isFetching;
+  const hasDatesSelected = !!egvStartDate && !!egvEndDate;
+  const hasApplied = !!appliedRange;
 
   const filteredWorkouts = useMemo(() => {
-    if (!workouts.data || !egvStartDate || !egvEndDate) return [];
-    const start = new Date(egvStartDate).getTime();
-    const end = new Date(egvEndDate).getTime();
+    if (!workouts.data || !appliedRange) return [];
+    const start = new Date(appliedRange.start).getTime();
+    const end = new Date(appliedRange.end).getTime();
     return workouts.data.filter((w: any) => {
       const wStart = new Date(w.startDate).getTime();
       return wStart >= start && wStart <= end;
     });
-  }, [workouts.data, egvStartDate, egvEndDate]);
+  }, [workouts.data, appliedRange]);
 
   return (
     <div className="space-y-4">
@@ -461,7 +481,7 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="text-xs font-mono text-muted-foreground block mb-1">
-                Start Date (UTC)
+                Start Date ({timezone === "utc" ? "UTC" : "Local"})
               </label>
               <input
                 type="datetime-local"
@@ -472,7 +492,7 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
             </div>
             <div>
               <label className="text-xs font-mono text-muted-foreground block mb-1">
-                End Date (UTC)
+                End Date ({timezone === "utc" ? "UTC" : "Local"})
               </label>
               <input
                 type="datetime-local"
@@ -519,33 +539,93 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
             </div>
           </div>
 
-          {/* Calculate button */}
-          {hasHealthData && hasEgvData && (
+          {/* Apply / Show Correlations button — always visible when prerequisites are met */}
+          <div className="flex items-center gap-3 pt-1">
             <Button
-              variant="outline"
               size="sm"
-              onClick={handleCalculateCorrelations}
-              disabled={correlating}
-              className="font-mono text-xs"
+              onClick={handleApplyRange}
+              disabled={!hasDatesSelected || !isConnected || !hasHealthData || isEgvLoading}
+              className="font-mono text-xs bg-emerald-600 hover:bg-emerald-700 text-white"
             >
-              {correlating ? (
+              {isEgvLoading ? (
                 <>
-                  <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-                  Calculating...
+                  <Loader2 className="w-3 h-3 mr-1.5 animate-spin" />
+                  Loading EGV Data...
                 </>
               ) : (
                 <>
-                  <TrendingUp className="w-3 h-3 mr-1" />
-                  Calculate Correlations
+                  <Play className="w-3 h-3 mr-1.5" />
+                  Show Correlations
                 </>
               )}
             </Button>
+
+            {hasApplied && hasEgvData && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleCalculateCorrelations}
+                disabled={correlating}
+                className="font-mono text-xs"
+              >
+                {correlating ? (
+                  <>
+                    <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                    Calculating...
+                  </>
+                ) : (
+                  <>
+                    <TrendingUp className="w-3 h-3 mr-1" />
+                    Calculate Pearson r
+                  </>
+                )}
+              </Button>
+            )}
+
+            {/* Contextual hints */}
+            {!hasHealthData && !isProcessing && (
+              <span className="text-[10px] font-mono text-muted-foreground">
+                Upload Apple Health data first (Step 1)
+              </span>
+            )}
+            {hasHealthData && !isConnected && (
+              <span className="text-[10px] font-mono text-muted-foreground">
+                Connect to Dexcom first (Connect tab)
+              </span>
+            )}
+            {hasHealthData && isConnected && !hasDatesSelected && (
+              <span className="text-[10px] font-mono text-muted-foreground">
+                Select a date range above
+              </span>
+            )}
+          </div>
+
+          {/* EGV fetch status messages */}
+          {hasApplied && egvQuery.isError && (
+            <div className="flex items-center gap-2 text-xs font-mono text-red-400 bg-red-400/10 rounded-md p-2 border border-red-400/20">
+              <XCircle className="w-3 h-3" />
+              Failed to load EGV data: {egvQuery.error?.message || "Unknown error"}
+            </div>
+          )}
+
+          {hasApplied && hasEgvData && (
+            <div className="flex items-center gap-2 text-xs font-mono text-green-400 bg-green-400/10 rounded-md p-2 border border-green-400/20">
+              <CheckCircle2 className="w-3 h-3" />
+              Loaded {egvQuery.data.records.length.toLocaleString()} EGV records. Chart is displayed below.
+            </div>
+          )}
+
+          {hasApplied && !isEgvLoading && !egvQuery.isError && egvQuery.data && !hasEgvData && (
+            <div className="flex items-center gap-2 text-xs font-mono text-yellow-400 bg-yellow-400/10 rounded-md p-2 border border-yellow-400/20">
+              <AlertTriangle className="w-3 h-3" />
+              No EGV records found for this date range. Try adjusting the dates.
+            </div>
           )}
         </CardContent>
       </Card>
 
       {/* Step 3: Correlation Chart */}
-      {hasHealthData && hasEgvData && healthBuckets.data && (
+      {hasApplied && hasEgvData && healthBuckets.data && (
         <Card className="bg-card border-border">
           <CardHeader className="pb-3">
             <CardTitle className="text-sm font-mono flex items-center gap-2">
