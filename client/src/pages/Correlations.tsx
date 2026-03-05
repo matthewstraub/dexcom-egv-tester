@@ -33,7 +33,7 @@ import {
   METRIC_LABELS,
 } from "../../../shared/const";
 import CorrelationChart from "@/components/CorrelationChart";
-import { formatDateTime } from "@/lib/timezone";
+import { formatDateTime, inputToApiDate } from "@/lib/timezone";
 
 interface CorrelationsProps {
   dexcomEnv: DexcomEnv;
@@ -53,6 +53,25 @@ const METRIC_ICONS: Record<AppleHealthMetricKey, typeof Heart> = {
 
 type UploadStage = "idle" | "extracting" | "parsing" | "saving" | "done" | "error";
 
+/** Split a date range into chunks of at most `maxDays` days */
+function splitDateRange(startISO: string, endISO: string, maxDays: number = 7): Array<{ start: string; end: string }> {
+  const chunks: Array<{ start: string; end: string }> = [];
+  const startMs = new Date(startISO + (startISO.endsWith("Z") ? "" : "Z")).getTime();
+  const endMs = new Date(endISO + (endISO.endsWith("Z") ? "" : "Z")).getTime();
+  const chunkMs = maxDays * 24 * 60 * 60 * 1000;
+
+  let cursor = startMs;
+  while (cursor < endMs) {
+    const chunkEnd = Math.min(cursor + chunkMs, endMs);
+    // Format as ISO 8601 without Z (Dexcom expects this)
+    const startStr = new Date(cursor).toISOString().slice(0, 19);
+    const endStr = new Date(chunkEnd).toISOString().slice(0, 19);
+    chunks.push({ start: startStr, end: endStr });
+    cursor = chunkEnd;
+  }
+  return chunks;
+}
+
 export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps) {
   const [uploadStage, setUploadStage] = useState<UploadStage>("idle");
   const [progressDetail, setProgressDetail] = useState("");
@@ -61,8 +80,13 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
   const [egvStartDate, setEgvStartDate] = useState("");
   const [egvEndDate, setEgvEndDate] = useState("");
   const [correlating, setCorrelating] = useState(false);
-  // Track whether the user has explicitly applied the date range
-  const [appliedRange, setAppliedRange] = useState<{ start: string; end: string } | null>(null);
+
+  // EGV data fetched via chunked approach
+  const [egvRecords, setEgvRecords] = useState<any[]>([]);
+  const [egvLoading, setEgvLoading] = useState(false);
+  const [egvError, setEgvError] = useState<string | null>(null);
+  const [egvLoadProgress, setEgvLoadProgress] = useState("");
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const workerRef = useRef<Worker | null>(null);
 
@@ -85,16 +109,14 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
       healthStatus.refetch();
       healthBuckets.refetch();
       workouts.refetch();
-      setAppliedRange(null);
+      setEgvRecords([]);
+      setEgvError(null);
       toast.success("Apple Health data cleared");
     },
   });
 
-  // EGV data — only fetch when user has explicitly applied a range
-  const egvQuery = trpc.dexcom.egvs.useQuery(
-    { startDate: appliedRange?.start || "", endDate: appliedRange?.end || "", env: dexcomEnv },
-    { enabled: !!appliedRange && dexcomStatus.data?.connected === true }
-  );
+  // Use the tRPC client directly for imperative fetching
+  const trpcUtils = trpc.useUtils();
 
   // Cleanup worker on unmount
   useEffect(() => {
@@ -237,28 +259,88 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
     }
   }, [saveResultsMutation]);
 
-  const handleApplyRange = useCallback(() => {
+  /**
+   * Fetch EGV data in chunks of 7 days to avoid Dexcom's 30-day limit
+   * and Render's 30-second timeout.
+   */
+  const handleApplyRange = useCallback(async () => {
     if (!egvStartDate || !egvEndDate) {
       toast.error("Please select both start and end dates.");
       return;
     }
-    if (new Date(egvStartDate) >= new Date(egvEndDate)) {
+
+    // Convert input dates to UTC for the API
+    const apiStart = inputToApiDate(egvStartDate, timezone);
+    const apiEnd = inputToApiDate(egvEndDate, timezone);
+
+    if (new Date(apiStart) >= new Date(apiEnd)) {
       toast.error("Start date must be before end date.");
       return;
     }
-    // Set the applied range, which triggers the EGV query
-    setAppliedRange({ start: egvStartDate, end: egvEndDate });
-  }, [egvStartDate, egvEndDate]);
+
+    setEgvLoading(true);
+    setEgvError(null);
+    setEgvRecords([]);
+    setEgvLoadProgress("Preparing...");
+
+    try {
+      // Split into 7-day chunks to stay well under Dexcom's 30-day max
+      const chunks = splitDateRange(apiStart, apiEnd, 7);
+      const allRecords: any[] = [];
+
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i];
+        setEgvLoadProgress(
+          `Fetching EGV data: chunk ${i + 1}/${chunks.length}...`
+        );
+
+        try {
+          const data = await trpcUtils.dexcom.egvs.fetch({
+            startDate: chunk.start,
+            endDate: chunk.end,
+            env: dexcomEnv,
+          });
+
+          if (data?.records) {
+            allRecords.push(...data.records);
+          }
+        } catch (chunkErr: any) {
+          // If a chunk fails, log it but continue with other chunks
+          console.warn(`Chunk ${i + 1} failed:`, chunkErr.message);
+          // If it's an auth error, stop entirely
+          if (chunkErr.message?.includes("Not connected") || chunkErr.message?.includes("authorize")) {
+            throw chunkErr;
+          }
+          // For other errors (e.g., no data for this range), continue
+        }
+      }
+
+      setEgvRecords(allRecords);
+      setEgvLoadProgress("");
+
+      if (allRecords.length === 0) {
+        toast.info("No EGV records found for this date range.");
+      } else {
+        toast.success(`Loaded ${allRecords.length.toLocaleString()} EGV records across ${chunks.length} chunk${chunks.length > 1 ? "s" : ""}.`);
+      }
+    } catch (err: any) {
+      setEgvError(err.message || "Failed to fetch EGV data");
+      toast.error(err.message || "Failed to fetch EGV data");
+    } finally {
+      setEgvLoading(false);
+      setEgvLoadProgress("");
+    }
+  }, [egvStartDate, egvEndDate, timezone, dexcomEnv, trpcUtils]);
 
   const handleCalculateCorrelations = useCallback(async () => {
-    if (!egvQuery.data?.records?.length) {
+    if (!egvRecords.length) {
       toast.error("No EGV data available. Please fetch EGV data first.");
       return;
     }
     setCorrelating(true);
     try {
       await correlationMutation.mutateAsync({
-        egvData: egvQuery.data.records.map((r: any) => ({
+        egvData: egvRecords.map((r: any) => ({
           systemTime: r.systemTime,
           value: r.value,
         })),
@@ -268,7 +350,7 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
     } finally {
       setCorrelating(false);
     }
-  }, [egvQuery.data, correlationMutation]);
+  }, [egvRecords, correlationMutation]);
 
   const toggleMetric = (metric: AppleHealthMetricKey) => {
     setSelectedMetrics((prev) =>
@@ -280,21 +362,30 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
 
   const isConnected = dexcomStatus.data?.connected === true;
   const hasHealthData = healthStatus.data?.uploaded === true;
-  const hasEgvData = !!egvQuery.data?.records?.length;
+  const hasEgvData = egvRecords.length > 0;
   const isProcessing = uploadStage === "extracting" || uploadStage === "parsing" || uploadStage === "saving";
-  const isEgvLoading = egvQuery.isLoading || egvQuery.isFetching;
   const hasDatesSelected = !!egvStartDate && !!egvEndDate;
-  const hasApplied = !!appliedRange;
+
+  // Compute date range in days for display
+  const rangeDays = useMemo(() => {
+    if (!egvStartDate || !egvEndDate) return null;
+    const apiStart = inputToApiDate(egvStartDate, timezone);
+    const apiEnd = inputToApiDate(egvEndDate, timezone);
+    const diff = (new Date(apiEnd).getTime() - new Date(apiStart).getTime()) / (1000 * 60 * 60 * 24);
+    return isNaN(diff) ? null : diff;
+  }, [egvStartDate, egvEndDate, timezone]);
 
   const filteredWorkouts = useMemo(() => {
-    if (!workouts.data || !appliedRange) return [];
-    const start = new Date(appliedRange.start).getTime();
-    const end = new Date(appliedRange.end).getTime();
+    if (!workouts.data || !egvRecords.length) return [];
+    // Use the actual time range of fetched EGV data
+    const times = egvRecords.map((r: any) => new Date(r.systemTime).getTime());
+    const start = Math.min(...times);
+    const end = Math.max(...times);
     return workouts.data.filter((w: any) => {
       const wStart = new Date(w.startDate).getTime();
       return wStart >= start && wStart <= end;
     });
-  }, [workouts.data, appliedRange]);
+  }, [workouts.data, egvRecords]);
 
   return (
     <div className="space-y-4">
@@ -503,6 +594,14 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
             </div>
           </div>
 
+          {/* Date range info */}
+          {rangeDays !== null && rangeDays > 0 && (
+            <div className="text-[10px] font-mono text-muted-foreground">
+              Selected range: {rangeDays.toFixed(1)} days
+              {rangeDays > 7 && ` (will fetch in ${Math.ceil(rangeDays / 7)} chunks of up to 7 days each)`}
+            </div>
+          )}
+
           {/* Metric toggles */}
           <div>
             <label className="text-xs font-mono text-muted-foreground block mb-2">
@@ -539,15 +638,15 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
             </div>
           </div>
 
-          {/* Apply / Show Correlations button — always visible when prerequisites are met */}
+          {/* Apply / Show Correlations button */}
           <div className="flex items-center gap-3 pt-1">
             <Button
               size="sm"
               onClick={handleApplyRange}
-              disabled={!hasDatesSelected || !isConnected || !hasHealthData || isEgvLoading}
+              disabled={!hasDatesSelected || !isConnected || !hasHealthData || egvLoading}
               className="font-mono text-xs bg-emerald-600 hover:bg-emerald-700 text-white"
             >
-              {isEgvLoading ? (
+              {egvLoading ? (
                 <>
                   <Loader2 className="w-3 h-3 mr-1.5 animate-spin" />
                   Loading EGV Data...
@@ -560,7 +659,7 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
               )}
             </Button>
 
-            {hasApplied && hasEgvData && (
+            {hasEgvData && (
               <Button
                 variant="outline"
                 size="sm"
@@ -600,22 +699,30 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
             )}
           </div>
 
+          {/* EGV loading progress */}
+          {egvLoading && egvLoadProgress && (
+            <div className="flex items-center gap-2 text-xs font-mono text-blue-400 bg-blue-400/10 rounded-md p-2 border border-blue-400/20">
+              <Loader2 className="w-3 h-3 animate-spin" />
+              {egvLoadProgress}
+            </div>
+          )}
+
           {/* EGV fetch status messages */}
-          {hasApplied && egvQuery.isError && (
+          {egvError && !egvLoading && (
             <div className="flex items-center gap-2 text-xs font-mono text-red-400 bg-red-400/10 rounded-md p-2 border border-red-400/20">
               <XCircle className="w-3 h-3" />
-              Failed to load EGV data: {egvQuery.error?.message || "Unknown error"}
+              Failed to load EGV data: {egvError}
             </div>
           )}
 
-          {hasApplied && hasEgvData && (
+          {hasEgvData && !egvLoading && (
             <div className="flex items-center gap-2 text-xs font-mono text-green-400 bg-green-400/10 rounded-md p-2 border border-green-400/20">
               <CheckCircle2 className="w-3 h-3" />
-              Loaded {egvQuery.data.records.length.toLocaleString()} EGV records. Chart is displayed below.
+              Loaded {egvRecords.length.toLocaleString()} EGV records. Chart is displayed below.
             </div>
           )}
 
-          {hasApplied && !isEgvLoading && !egvQuery.isError && egvQuery.data && !hasEgvData && (
+          {!egvLoading && !egvError && !hasEgvData && egvRecords !== null && egvLoadProgress === "" && egvStartDate && egvEndDate && egvRecords.length === 0 && uploadStage === "done" && (
             <div className="flex items-center gap-2 text-xs font-mono text-yellow-400 bg-yellow-400/10 rounded-md p-2 border border-yellow-400/20">
               <AlertTriangle className="w-3 h-3" />
               No EGV records found for this date range. Try adjusting the dates.
@@ -625,7 +732,7 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
       </Card>
 
       {/* Step 3: Correlation Chart */}
-      {hasApplied && hasEgvData && healthBuckets.data && (
+      {hasEgvData && healthBuckets.data && (
         <Card className="bg-card border-border">
           <CardHeader className="pb-3">
             <CardTitle className="text-sm font-mono flex items-center gap-2">
@@ -635,7 +742,7 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
           </CardHeader>
           <CardContent>
             <CorrelationChart
-              egvData={egvQuery.data?.records || []}
+              egvData={egvRecords}
               healthBuckets={healthBuckets.data}
               workouts={filteredWorkouts}
               selectedMetrics={selectedMetrics}
