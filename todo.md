@@ -82,4 +82,3 @@
 - [x] Fix Zod validation: made workout fields optional in Zod schema + extract sourceName in Web Worker
 - [x] Fix missing "Apply" / "Show Correlations" button in Step 2: Configure Correlation View section
 - [x] Fix 'Unexpected end of JSON input' error when fetching EGV data for large date ranges (31 days)
-- [x] Fix Render OOM crash (exit 134) + false 'No EGV records found' in Health Correlations chunked fetch
