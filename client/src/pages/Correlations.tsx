@@ -115,7 +115,8 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
     },
   });
 
-
+  // Use the tRPC client directly for imperative fetching
+  const trpcUtils = trpc.useUtils();
 
   // Cleanup worker on unmount
   useEffect(() => {
@@ -259,35 +260,8 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
   }, [saveResultsMutation]);
 
   /**
-   * Fetch a single EGV chunk via direct fetch(), bypassing tRPC's httpBatchLink.
-   * This ensures truly sequential HTTP requests so the server only handles
-   * one Dexcom API call at a time, preventing OOM on memory-limited hosts.
-   */
-  const fetchEgvChunk = useCallback(async (
-    startDate: string,
-    endDate: string,
-    env: DexcomEnv
-  ): Promise<any[]> => {
-    const input = encodeURIComponent(JSON.stringify({ startDate, endDate, env }));
-    const res = await fetch(`/api/trpc/dexcom.egvs?input=${input}`, {
-      credentials: "include",
-    });
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(text.slice(0, 200) || `HTTP ${res.status}`);
-    }
-
-    const json = await res.json();
-    // tRPC non-batched response shape: { result: { data: { json: { records: [...] } } } }
-    const data = json?.result?.data?.json ?? json?.result?.data ?? json?.result ?? {};
-    return data?.records ?? [];
-  }, []);
-
-  /**
    * Fetch EGV data in chunks of 7 days to avoid Dexcom's 30-day limit
    * and Render's 30-second timeout.
-   * Uses direct fetch() to ensure truly sequential requests (no batching).
    */
   const handleApplyRange = useCallback(async () => {
     if (!egvStartDate || !egvEndDate) {
@@ -321,9 +295,14 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
         );
 
         try {
-          const records = await fetchEgvChunk(chunk.start, chunk.end, dexcomEnv);
-          if (records.length > 0) {
-            allRecords.push(...records);
+          const data = await trpcUtils.dexcom.egvs.fetch({
+            startDate: chunk.start,
+            endDate: chunk.end,
+            env: dexcomEnv,
+          });
+
+          if (data?.records) {
+            allRecords.push(...data.records);
           }
         } catch (chunkErr: any) {
           // If a chunk fails, log it but continue with other chunks
@@ -333,11 +312,6 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
             throw chunkErr;
           }
           // For other errors (e.g., no data for this range), continue
-        }
-
-        // Delay between chunks to let the server GC and avoid OOM
-        if (i < chunks.length - 1) {
-          await new Promise((resolve) => setTimeout(resolve, 500));
         }
       }
 
@@ -356,7 +330,7 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
       setEgvLoading(false);
       setEgvLoadProgress("");
     }
-  }, [egvStartDate, egvEndDate, timezone, dexcomEnv, fetchEgvChunk]);
+  }, [egvStartDate, egvEndDate, timezone, dexcomEnv, trpcUtils]);
 
   const handleCalculateCorrelations = useCallback(async () => {
     if (!egvRecords.length) {
