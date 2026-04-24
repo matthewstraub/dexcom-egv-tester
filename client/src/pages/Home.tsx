@@ -132,7 +132,7 @@ export default function Home() {
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [queryEnabled, setQueryEnabled] = useState(false);
-  const [dexcomEnv, setDexcomEnv] = useState<DexcomEnv>("sandbox");
+  const [dexcomEnv, setDexcomEnv] = useState<DexcomEnv>("production");
   const [timezone, setTimezone] = useState<TimezoneMode>("local");
 
   const localAbbr = getLocalTimezoneAbbr();
@@ -499,9 +499,23 @@ export default function Home() {
               <Card className="bg-card border-destructive/50"><CardContent className="pt-6"><div className="flex items-start gap-3"><XCircle className="h-5 w-5 text-destructive shrink-0 mt-0.5" /><div><p className="text-sm font-medium text-destructive">API Error</p><p className="text-xs font-mono text-muted-foreground mt-1">{egvQuery.error.message}</p></div></div></CardContent></Card>
             )}
 
-            {egvQuery.data?.records && egvQuery.data.records.length > 0 && (
+            {egvQuery.data?.records && egvQuery.data.records.length > 0 && (() => {
+              const records = egvQuery.data.records;
+              const validValues = records.map((r: any) => r.value).filter((v: number) => typeof v === 'number' && !isNaN(v));
+              const avgGlucose = validValues.length > 0 ? validValues.reduce((sum: number, v: number) => sum + v, 0) / validValues.length : null;
+              return (
               <Card className="bg-card border-border">
-                <CardHeader><CardTitle className="text-base">Glucose Timeline <span className="text-xs font-mono text-muted-foreground ml-2">({tzLabel})</span></CardTitle></CardHeader>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-base">Glucose Timeline <span className="text-xs font-mono text-muted-foreground ml-2">({tzLabel})</span></CardTitle>
+                    {avgGlucose !== null && (
+                      <div className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-secondary/50 border border-border">
+                        <span className="text-xs font-mono text-muted-foreground">Avg:</span>
+                        <span className={"text-sm font-mono font-semibold " + (avgGlucose < 70 ? "text-red-400" : avgGlucose <= 180 ? "text-green-400" : "text-amber-400")}>{Math.round(avgGlucose)} mg/dL</span>
+                      </div>
+                    )}
+                  </div>
+                </CardHeader>
                 <CardContent>
                   <EgvChart ref={chartRef} records={egvQuery.data.records} timezone={timezone} />
                   <div className="flex items-center gap-4 mt-4 text-xs font-mono text-muted-foreground">
@@ -510,7 +524,8 @@ export default function Home() {
                   </div>
                 </CardContent>
               </Card>
-            )}
+              );
+            })()}
 
             {egvQuery.data && <JsonViewer data={egvQuery.data} title={`Response \u2014 GET /v3/users/self/egvs (${dexcomEnv})`} maxHeight="500px" />}
             {dataRange.data && <JsonViewer data={dataRange.data} title={`Response \u2014 GET /v3/users/self/dataRange (${dexcomEnv})`} maxHeight="300px" />}

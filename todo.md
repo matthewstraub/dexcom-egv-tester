@@ -82,3 +82,5 @@
 - [x] Fix Zod validation: made workout fields optional in Zod schema + extract sourceName in Web Worker
 - [x] Fix missing "Apply" / "Show Correlations" button in Step 2: Configure Correlation View section
 - [x] Fix 'Unexpected end of JSON input' error when fetching EGV data for large date ranges (31 days)
+- [x] Default to Production tab instead of Sandbox on page load
+- [x] Display average glucose value next to "Glucose Timeline" heading on EGV Data tab
