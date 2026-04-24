@@ -11,7 +11,7 @@ import {
   ReferenceArea,
 } from "recharts";
 import type { TimezoneMode } from "../../../shared/const";
-import { formatTime, formatDateTime } from "@/lib/timezone";
+import { formatTime, formatDateTime, formatDateTimeShort } from "@/lib/timezone";
 
 interface EgvRecord {
   recordId: string;
@@ -69,6 +69,15 @@ export const EgvChart = forwardRef<HTMLDivElement, EgvChartProps>(function EgvCh
       .sort((a, b) => a.time - b.time);
   }, [records]);
 
+  // Determine if the data spans multiple days
+  const isMultiDay = useMemo(() => {
+    if (chartData.length < 2) return false;
+    const firstTime = chartData[0].time;
+    const lastTime = chartData[chartData.length - 1].time;
+    const diffMs = lastTime - firstTime;
+    return diffMs > 24 * 60 * 60 * 1000; // more than 24 hours
+  }, [chartData]);
+
   if (chartData.length === 0) {
     return (
       <div className="flex items-center justify-center h-64 text-muted-foreground font-mono text-sm">
@@ -118,9 +127,12 @@ export const EgvChart = forwardRef<HTMLDivElement, EgvChartProps>(function EgvCh
             dataKey="time"
             type="number"
             domain={["dataMin", "dataMax"]}
-            tickFormatter={(val) => formatTime(val, timezone)}
+            tickFormatter={(val) => isMultiDay ? formatDateTimeShort(val, timezone) : formatTime(val, timezone)}
             stroke="oklch(0.45 0.02 264)"
-            tick={{ fontSize: 11, fontFamily: "Fira Code" }}
+            tick={{ fontSize: isMultiDay ? 10 : 11, fontFamily: "Fira Code" }}
+            angle={isMultiDay ? -25 : 0}
+            textAnchor={isMultiDay ? "end" : "middle"}
+            height={isMultiDay ? 50 : 30}
           />
           <YAxis
             domain={[40, 400]}

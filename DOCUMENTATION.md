@@ -1,7 +1,7 @@
 # Dexcom EGV Tester — Technical Documentation
 
-**Version**: 1.1  
-**Last Updated**: March 4, 2026  
+**Version**: 1.2  
+**Last Updated**: April 24, 2026  
 **Author**: Manus AI
 
 ---
@@ -189,7 +189,7 @@ The table below maps each significant file to its responsibility in the applicat
 
 ### 7.1 Environment Toggle
 
-A toggle in the header switches between **Sandbox** and **Production** environments. Each environment maintains independent OAuth tokens and connection state. Production mode displays a warning banner reminding users that real patient data is being accessed.
+A toggle in the header switches between **Sandbox** and **Production** environments. The application **defaults to Production** on page load. Each environment maintains independent OAuth tokens and connection state. Production mode displays a warning banner reminding users that real patient data is being accessed.
 
 ### 7.2 Timezone Selector
 
@@ -206,6 +206,9 @@ The glucose chart uses Recharts to render an interactive timeline with the follo
 | Red dashed line (54) | Urgent low threshold |
 | Teal line | Glucose readings over time |
 | Hover tooltip | Shows exact value, time, trend arrow, and rate of change |
+| **Average glucose badge** | Displayed next to the chart title, color-coded: green (70–180), red (<70), amber (>180) |
+
+The chart X-axis uses **smart axis labels** that adapt to the date range being displayed. When the data spans a single day or less, only times are shown (e.g., "02:30 PM"). When the data spans multiple days, the axis switches to a date+time format (e.g., "01/15 14:30") with slightly angled labels to prevent overlap.
 
 ### 7.4 Export Options
 
@@ -215,13 +218,17 @@ Three export formats are available once EGV data is loaded:
 |--------|----------|-----------------|
 | **CSV** | All EGV record fields plus a formatted display time column | `dexcom-egvs_<env>_<timestamp>.csv` |
 | **JSON** | Raw Dexcom API response with pretty-print indentation | `dexcom-egvs_<env>_<timestamp>.json` |
-| **PNG** | Glucose chart rendered at 2x resolution via SVG-to-Canvas | `dexcom-chart_<env>_<timestamp>.png` |
+| **PNG** | Glucose chart with metadata header (date range, average glucose, record count) rendered at 2x resolution via SVG-to-Canvas | `dexcom-chart_<env>_<timestamp>.png` |
+
+The PNG export includes a header above the chart containing: the chart title with timezone label, the average glucose value (color-coded by range), formatted start and end dates, the date range duration (hours or days), the total record count, and the environment label (Production or Sandbox).
 
 ### 7.5 Apple Health Correlations
 
 The **Health Correlations** tab allows users to upload an Apple Health export (ZIP file containing `export.xml`) and overlay health metrics with EGV glucose data on a shared timeline.
 
 **Upload Flow**: Users export their health data from the Apple Health app on iPhone (Profile > Export All Health Data), which produces a ZIP file. The app extracts `export.xml` from the ZIP using `adm-zip`, then parses it with a streaming SAX parser (`sax` library) to handle files that can exceed 100 MB. Only relevant health metrics are extracted; all other record types are skipped for performance.
+
+**Show Correlations Button**: After uploading health data and selecting a date range and metrics, users click the "Show Correlations" button to trigger EGV data fetching and chart rendering. The button provides contextual hints when prerequisites are missing (e.g., "Upload Apple Health data first" or "Connect to Dexcom first"). For date ranges exceeding 7 days, the system automatically splits the request into 7-day chunks, fetching each sequentially via direct `fetch()` calls (bypassing tRPC's batch link to avoid server memory issues). A progress indicator shows "Fetching chunk 2/5..." during multi-chunk loads.
 
 **Supported Metrics**:
 
@@ -349,7 +356,7 @@ Run the full test suite with:
 pnpm test
 ```
 
-Tests are located in `server/dexcom.routers.test.ts`, `server/dexcom.credentials.test.ts`, `server/auth.logout.test.ts`, `client/src/lib/export.test.ts`, and `server/appleHealth.test.ts`. They validate date range logic, tRPC procedure behavior, credential configuration, export utilities, Apple Health parsing, aggregation, and correlation calculations.
+Tests are located in `server/dexcom.routers.test.ts`, `server/dexcom.credentials.test.ts`, `server/auth.logout.test.ts`, `client/src/lib/export.test.ts`, `client/src/lib/splitDateRange.test.ts`, and `server/appleHealth.test.ts`. They validate date range logic, date range chunking, tRPC procedure behavior, credential configuration, export utilities, Apple Health parsing, aggregation, and correlation calculations.
 
 ### 11.8 Local Development
 

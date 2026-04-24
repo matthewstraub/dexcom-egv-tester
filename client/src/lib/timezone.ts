@@ -58,6 +58,28 @@ export function formatTime(date: Date | string | number, mode: TimezoneMode): st
 }
 
 /**
+ * Format a Date or ISO string as a short date+time for chart axes (multi-day view).
+ * Returns "MM/DD HH:MM" format.
+ */
+export function formatDateTimeShort(date: Date | string | number, mode: TimezoneMode): string {
+  const d = typeof date === "number" ? new Date(date) : typeof date === "string" ? new Date(date) : date;
+  if (isNaN(d.getTime())) return "--/-- --:--";
+
+  if (mode === "utc") {
+    const month = String(d.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(d.getUTCDate()).padStart(2, "0");
+    const hours = String(d.getUTCHours()).padStart(2, "0");
+    const mins = String(d.getUTCMinutes()).padStart(2, "0");
+    return `${month}/${day} ${hours}:${mins}`;
+  }
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const hours = String(d.getHours()).padStart(2, "0");
+  const mins = String(d.getMinutes()).padStart(2, "0");
+  return `${month}/${day} ${hours}:${mins}`;
+}
+
+/**
  * Format a Date or ISO string as a short date for display.
  */
 export function formatDate(date: Date | string, mode: TimezoneMode): string {

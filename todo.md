@@ -85,3 +85,5 @@
 - [x] Default to Production tab instead of Sandbox on page load
 - [x] Display average glucose value next to "Glucose Timeline" heading on EGV Data tab
 - [x] Polish PNG export: include date range, start/end dates, and average glucose in exported image
+- [x] Smart chart axis labels: show dates for multi-day timelines, times-only for single-day
+- [x] Review and update README documentation for today's changes

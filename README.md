@@ -1,7 +1,7 @@
 # Dexcom EGV Tester — Technical Documentation
 
-**Version**: 1.0  
-**Last Updated**: February 24, 2026  
+**Version**: 1.2  
+**Last Updated**: April 24, 2026  
 **Author**: Manus AI
 
 ---
@@ -171,7 +171,7 @@ The table below maps each significant file to its responsibility in the applicat
 | `server/_core/env.ts` | Environment variable parsing and validation |
 | `drizzle/schema.ts` | Database table definitions (`users`, `dexcom_tokens`) using Drizzle ORM |
 | `shared/const.ts` | Shared constants — Dexcom base URLs, environment types, timezone mode type |
-| `client/src/pages/Home.tsx` | Main UI — tabbed interface (Connect, EGV Data, API Info), environment toggle, date inputs, data table |
+| `client/src/pages/Home.tsx` | Main UI — tabbed interface (Connect, EGV Data, Health Correlations, API Info), environment toggle, date inputs, data table |
 | `client/src/components/EgvChart.tsx` | Recharts-based glucose timeline chart with target range highlighting and trend tooltips |
 | `client/src/components/JsonViewer.tsx` | Syntax-highlighted JSON viewer for raw API responses |
 | `client/src/lib/timezone.ts` | Timezone conversion utilities — UTC/local formatting, input-to-API date conversion |
@@ -185,7 +185,7 @@ The table below maps each significant file to its responsibility in the applicat
 
 ### 7.1 Environment Toggle
 
-A toggle in the header switches between **Sandbox** and **Production** environments. Each environment maintains independent OAuth tokens and connection state. Production mode displays a warning banner reminding users that real patient data is being accessed.
+A toggle in the header switches between **Sandbox** and **Production** environments. The application **defaults to Production** on page load. Each environment maintains independent OAuth tokens and connection state. Production mode displays a warning banner reminding users that real patient data is being accessed.
 
 ### 7.2 Timezone Selector
 
@@ -202,6 +202,9 @@ The glucose chart uses Recharts to render an interactive timeline with the follo
 | Red dashed line (54) | Urgent low threshold |
 | Teal line | Glucose readings over time |
 | Hover tooltip | Shows exact value, time, trend arrow, and rate of change |
+| **Average glucose badge** | Displayed next to the chart title, color-coded: green (70–180), red (<70), amber (>180) |
+
+The chart X-axis uses **smart axis labels** that adapt to the date range being displayed. When the data spans a single day or less, only times are shown (e.g., "02:30 PM"). When the data spans multiple days, the axis switches to a date+time format (e.g., "01/15 14:30") with slightly angled labels to prevent overlap.
 
 ### 7.4 Export Options
 
@@ -211,7 +214,9 @@ Three export formats are available once EGV data is loaded:
 |--------|----------|-----------------|
 | **CSV** | All EGV record fields plus a formatted display time column | `dexcom-egvs_<env>_<timestamp>.csv` |
 | **JSON** | Raw Dexcom API response with pretty-print indentation | `dexcom-egvs_<env>_<timestamp>.json` |
-| **PNG** | Glucose chart rendered at 2x resolution via SVG-to-Canvas | `dexcom-chart_<env>_<timestamp>.png` |
+| **PNG** | Glucose chart with metadata header (date range, average glucose, record count) rendered at 2x resolution via SVG-to-Canvas | `dexcom-chart_<env>_<timestamp>.png` |
+
+The PNG export includes a header above the chart containing: the chart title with timezone label, the average glucose value (color-coded by range), formatted start and end dates, the date range duration (hours or days), the total record count, and the environment label (Production or Sandbox).
 
 ---
 
@@ -318,7 +323,7 @@ Run the full test suite with:
 pnpm test
 ```
 
-Tests are located in `server/dexcom.routers.test.ts`, `server/dexcom.credentials.test.ts`, `server/auth.logout.test.ts`, and `client/src/lib/export.test.ts`. They validate date range logic, tRPC procedure behavior, credential configuration, and export utilities.
+Tests are located in `server/dexcom.routers.test.ts`, `server/dexcom.credentials.test.ts`, `server/auth.logout.test.ts`, `client/src/lib/export.test.ts`, `client/src/lib/splitDateRange.test.ts`, and `server/appleHealth.test.ts`. They validate date range logic, date range chunking, tRPC procedure behavior, credential configuration, export utilities, Apple Health parsing, aggregation, and correlation calculations.
 
 ### 11.8 Local Development
 
