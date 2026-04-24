@@ -16,7 +16,7 @@ import {
   Activity, CheckCircle2, Circle, Clock, Download, ExternalLink, FileJson, FileSpreadsheet,
   Image, Loader2, Plug, PlugZap, Terminal, Unplug, XCircle, Globe, FlaskConical, HeartPulse,
 } from "lucide-react";
-import { exportCsv, exportJson, exportChartPng } from "@/lib/export";
+import { exportCsv, exportJson, exportChartPng, type ChartExportMeta } from "@/lib/export";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { DexcomEnv, TimezoneMode } from "../../../shared/const";
@@ -259,7 +259,20 @@ export default function Home() {
   };
 
   const handleExportChart = async () => {
-    const success = await exportChartPng(chartRef.current, dexcomEnv);
+    // Calculate average glucose for the export header
+    const records = egvQuery.data?.records || [];
+    const validValues = records.map((r: any) => r.value).filter((v: number) => typeof v === 'number' && !isNaN(v));
+    const avgGlucose = validValues.length > 0 ? validValues.reduce((sum: number, v: number) => sum + v, 0) / validValues.length : null;
+
+    const meta: ChartExportMeta = {
+      startDate: apiStartDate,
+      endDate: apiEndDate,
+      timezone,
+      avgGlucose,
+      recordCount: records.length,
+      env: dexcomEnv,
+    };
+    const success = await exportChartPng(chartRef.current, dexcomEnv, meta);
     if (success) toast.success("Chart exported as PNG");
     else toast.error("Failed to export chart");
   };

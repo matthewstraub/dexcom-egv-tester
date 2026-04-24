@@ -1,5 +1,5 @@
 import type { TimezoneMode } from "../../../shared/const";
-import { formatDateTime } from "./timezone";
+import { formatDateTime, getLocalTimezoneAbbr } from "./timezone";
 
 interface EgvRecord {
   recordId: string;
@@ -109,13 +109,23 @@ export function exportJson(data: unknown, env: string) {
   downloadBlob(blob, `dexcom-egvs_${env}_${fileTimestamp()}.json`);
 }
 
+export interface ChartExportMeta {
+  startDate: string;
+  endDate: string;
+  timezone: TimezoneMode;
+  avgGlucose: number | null;
+  recordCount: number;
+  env: string;
+}
+
 /**
  * Export the chart as a PNG image using the SVG inside the chart container.
- * Uses html2canvas-style approach via SVG serialization + Canvas rendering.
+ * Adds a header with date range, start/end dates, and average glucose.
  */
 export async function exportChartPng(
   chartContainerRef: HTMLDivElement | null,
-  env: string
+  env: string,
+  meta?: ChartExportMeta
 ): Promise<boolean> {
   if (!chartContainerRef) return false;
 
@@ -128,12 +138,12 @@ export async function exportChartPng(
 
     // Get the actual rendered dimensions
     const bbox = svgElement.getBoundingClientRect();
-    const width = bbox.width;
-    const height = bbox.height;
+    const chartWidth = bbox.width;
+    const chartHeight = bbox.height;
 
     // Set explicit dimensions on the cloned SVG
-    clonedSvg.setAttribute("width", String(width));
-    clonedSvg.setAttribute("height", String(height));
+    clonedSvg.setAttribute("width", String(chartWidth));
+    clonedSvg.setAttribute("height", String(chartHeight));
 
     // Add a dark background to the SVG
     const bgRect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
@@ -146,7 +156,6 @@ export async function exportChartPng(
     const textElements = clonedSvg.querySelectorAll("text, tspan");
     textElements.forEach((el) => {
       const htmlEl = el as SVGElement;
-      // Find the corresponding original element to get computed styles
       const origEl = svgElement.querySelector(
         `${el.tagName}${el.getAttribute("x") ? `[x="${el.getAttribute("x")}"]` : ""}`
       );
@@ -164,11 +173,17 @@ export async function exportChartPng(
     const svgBlob = new Blob([svgString], { type: "image/svg+xml;charset=utf-8" });
     const svgUrl = URL.createObjectURL(svgBlob);
 
+    // Calculate header height
+    const headerHeight = meta ? 80 : 0;
+    const padding = 24;
+    const totalWidth = chartWidth;
+    const totalHeight = chartHeight + headerHeight;
+
     // Render to canvas at 2x resolution for crisp output
     const scale = 2;
     const canvas = document.createElement("canvas");
-    canvas.width = width * scale;
-    canvas.height = height * scale;
+    canvas.width = totalWidth * scale;
+    canvas.height = totalHeight * scale;
     const ctx = canvas.getContext("2d");
     if (!ctx) return false;
 
@@ -177,7 +192,57 @@ export async function exportChartPng(
     return new Promise<boolean>((resolve) => {
       const img = new Image();
       img.onload = () => {
-        ctx.drawImage(img, 0, 0, width, height);
+        // Draw dark background for entire canvas
+        ctx.fillStyle = "#1a1b26";
+        ctx.fillRect(0, 0, totalWidth, totalHeight);
+
+        // Draw header if metadata provided
+        if (meta) {
+          const tzLabel = meta.timezone === "utc" ? "UTC" : getLocalTimezoneAbbr();
+          const startFormatted = formatDateTime(meta.startDate, meta.timezone);
+          const endFormatted = formatDateTime(meta.endDate, meta.timezone);
+          const diffMs = new Date(meta.endDate + (meta.endDate.endsWith("Z") ? "" : "Z")).getTime() -
+                         new Date(meta.startDate + (meta.startDate.endsWith("Z") ? "" : "Z")).getTime();
+          const diffDays = diffMs / (1000 * 60 * 60 * 24);
+          const rangeLabel = diffDays < 1
+            ? `${(diffDays * 24).toFixed(1)} hours`
+            : `${diffDays.toFixed(1)} days`;
+
+          // Title line
+          ctx.fillStyle = "#c0caf5";
+          ctx.font = "bold 16px 'Fira Code', 'Courier New', monospace";
+          ctx.fillText(`Glucose Timeline (${tzLabel})`, padding, 28);
+
+          // Average glucose (right-aligned)
+          if (meta.avgGlucose !== null) {
+            const avgText = `Avg: ${Math.round(meta.avgGlucose)} mg/dL`;
+            const avgColor = meta.avgGlucose < 70 ? "#f7768e" : meta.avgGlucose <= 180 ? "#9ece6a" : "#e0af68";
+            ctx.font = "bold 15px 'Fira Code', 'Courier New', monospace";
+            const avgWidth = ctx.measureText(avgText).width;
+            ctx.fillStyle = avgColor;
+            ctx.fillText(avgText, totalWidth - padding - avgWidth, 28);
+          }
+
+          // Date range line
+          ctx.fillStyle = "#565f89";
+          ctx.font = "12px 'Fira Code', 'Courier New', monospace";
+          ctx.fillText(`${startFormatted}  \u2192  ${endFormatted}`, padding, 50);
+
+          // Stats line
+          const statsText = `Range: ${rangeLabel}  \u00B7  ${meta.recordCount.toLocaleString()} records  \u00B7  ${meta.env === "production" ? "Production" : "Sandbox"}`;
+          ctx.fillText(statsText, padding, 68);
+
+          // Separator line
+          ctx.strokeStyle = "#2a2b3d";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(padding, headerHeight - 4);
+          ctx.lineTo(totalWidth - padding, headerHeight - 4);
+          ctx.stroke();
+        }
+
+        // Draw chart below header
+        ctx.drawImage(img, 0, headerHeight, chartWidth, chartHeight);
         URL.revokeObjectURL(svgUrl);
 
         canvas.toBlob((blob) => {
