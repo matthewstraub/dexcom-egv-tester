@@ -197,12 +197,12 @@ The glucose chart uses Recharts to render an interactive timeline with the follo
 
 | Element | Description |
 |---------|-------------|
-| Green shaded area (70–180 mg/dL) | Target glucose range |
-| Amber dashed lines (70, 180) | Low and high thresholds |
+| Green shaded area (80–180 mg/dL) | Target glucose range |
+| Amber dashed lines (80, 180) | Low and high thresholds |
 | Red dashed line (54) | Urgent low threshold |
 | Teal line | Glucose readings over time |
 | Hover tooltip | Shows exact value, time, trend arrow, and rate of change |
-| **Average glucose badge** | Displayed next to the chart title, color-coded: green (70–180), red (<70), amber (>180) |
+| **Average glucose badge** | Displayed next to the chart title, color-coded: green (80–180), red (<80), amber (>180) |
 
 The chart X-axis uses **smart axis labels** that adapt to the date range being displayed. When the data spans a single day or less, only times are shown (e.g., "02:30 PM"). When the data spans multiple days, the axis switches to a date+time format (e.g., "01/15 14:30") with slightly angled labels to prevent overlap.
 
