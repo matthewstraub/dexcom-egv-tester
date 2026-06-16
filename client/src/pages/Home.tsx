@@ -524,7 +524,7 @@ export default function Home() {
                     {avgGlucose !== null && (
                       <div className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-secondary/50 border border-border">
                         <span className="text-xs font-mono text-muted-foreground">Avg:</span>
-                        <span className={"text-sm font-mono font-semibold " + (avgGlucose < 70 ? "text-red-400" : avgGlucose <= 180 ? "text-green-400" : "text-amber-400")}>{Math.round(avgGlucose)} mg/dL</span>
+                        <span className={"text-sm font-mono font-semibold " + (avgGlucose < 80 ? "text-red-400" : avgGlucose <= 180 ? "text-green-400" : "text-amber-400")}>{Math.round(avgGlucose)} mg/dL</span>
                       </div>
                     )}
                   </div>
@@ -532,7 +532,7 @@ export default function Home() {
                 <CardContent>
                   <EgvChart ref={chartRef} records={egvQuery.data.records} timezone={timezone} />
                   <div className="flex items-center gap-4 mt-4 text-xs font-mono text-muted-foreground">
-                    <div className="flex items-center gap-1.5"><div className="w-3 h-0.5 bg-[oklch(0.75_0.15_60)]" /><span>70 / 180 mg/dL thresholds</span></div>
+                    <div className="flex items-center gap-1.5"><div className="w-3 h-0.5 bg-[oklch(0.75_0.15_60)]" /><span>80 / 180 mg/dL thresholds</span></div>
                     <div className="flex items-center gap-1.5"><div className="w-3 h-3 bg-[oklch(0.72_0.15_145)] opacity-10 rounded-sm" /><span>Target range</span></div>
                   </div>
                 </CardContent>

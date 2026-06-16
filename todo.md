@@ -87,3 +87,4 @@
 - [x] Polish PNG export: include date range, start/end dates, and average glucose in exported image
 - [x] Smart chart axis labels: show dates for multi-day timelines, times-only for single-day
 - [x] Review and update README documentation for today's changes
+- [x] Change low glucose threshold from 70 to 80 mg/dL on EGV chart

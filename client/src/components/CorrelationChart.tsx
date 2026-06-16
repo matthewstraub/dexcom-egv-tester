@@ -190,13 +190,13 @@ export default function CorrelationChart({
 
         {/* Target glucose range */}
         <ReferenceArea
-          y1={70}
+          y1={80}
           y2={180}
           fill="oklch(0.50 0.15 145 / 0.06)"
           yAxisId="glucose"
         />
         <ReferenceLine
-          y={70}
+          y={80}
           yAxisId="glucose"
           stroke="oklch(0.55 0.15 145)"
           strokeDasharray="4 4"

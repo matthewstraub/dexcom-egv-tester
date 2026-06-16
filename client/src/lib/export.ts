@@ -216,7 +216,7 @@ export async function exportChartPng(
           // Average glucose (right-aligned)
           if (meta.avgGlucose !== null) {
             const avgText = `Avg: ${Math.round(meta.avgGlucose)} mg/dL`;
-            const avgColor = meta.avgGlucose < 70 ? "#f7768e" : meta.avgGlucose <= 180 ? "#9ece6a" : "#e0af68";
+            const avgColor = meta.avgGlucose < 80 ? "#f7768e" : meta.avgGlucose <= 180 ? "#9ece6a" : "#e0af68";
             ctx.font = "bold 15px 'Fira Code', 'Courier New', monospace";
             const avgWidth = ctx.measureText(avgText).width;
             ctx.fillStyle = avgColor;

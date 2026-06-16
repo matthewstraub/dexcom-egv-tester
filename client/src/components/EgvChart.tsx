@@ -48,7 +48,7 @@ const TREND_ARROWS: Record<string, string> = {
 function getGlucoseColor(value: number | null): string {
   if (value === null) return "oklch(0.58 0.02 264)";
   if (value < 54) return "oklch(0.65 0.25 25)"; // urgent low - red
-  if (value < 70) return "oklch(0.75 0.15 60)"; // low - amber
+  if (value < 80) return "oklch(0.75 0.15 60)"; // low - amber
   if (value <= 180) return "oklch(0.72 0.15 145)"; // in range - green
   if (value <= 250) return "oklch(0.75 0.15 60)"; // high - amber
   return "oklch(0.65 0.25 25)"; // very high - red
@@ -97,14 +97,14 @@ export const EgvChart = forwardRef<HTMLDivElement, EgvChartProps>(function EgvCh
           />
           {/* Target range background */}
           <ReferenceArea
-            y1={70}
+            y1={80}
             y2={180}
             fill="oklch(0.72 0.15 145)"
             fillOpacity={0.06}
           />
           {/* Low threshold */}
           <ReferenceLine
-            y={70}
+            y={80}
             stroke="oklch(0.75 0.15 60)"
             strokeDasharray="4 4"
             strokeOpacity={0.5}
