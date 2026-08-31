@@ -32,6 +32,12 @@ const TREND_MAP: Record<string, { arrow: string; range: string }> = {
   doubleDown: { arrow: "\u2B07\u2B07", range: "(-8 to -3)" },
 };
 
+// On phones the tab list is a 2x2 grid, so triggers get their own height and are
+// allowed to wrap \u2014 "Health Correlations" does not fit one line in a half-width
+// cell. From sm up we hand height and nowrap back to the Tabs primitive.
+const TAB_TRIGGER_CLS =
+  "font-mono text-xs data-[state=active]:bg-card h-auto min-h-8 w-full whitespace-normal py-1.5 leading-tight sm:h-[calc(100%-1px)] sm:w-auto sm:whitespace-nowrap sm:py-1";
+
 function OAuthStep({ step, title, description, status }: { step: number; title: string; description: string; status: "pending" | "complete" | "ready" }) {
   const cls = status === "complete"
     ? "bg-green-500/10 text-green-400 border border-green-500/30"
@@ -55,7 +61,7 @@ function OAuthStep({ step, title, description, status }: { step: number; title: 
 function ParamRow({ name, type, required, description }: { name: string; type: string; required?: boolean; description: string }) {
   return (
     <div className="flex flex-col gap-0.5 px-3 py-2 rounded-md bg-secondary/30">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
         <code className="text-xs text-primary">{name}</code>
         <span className="text-[10px] text-muted-foreground">{type}</span>
         {required && <Badge variant="outline" className="text-[10px] h-4 px-1 border-destructive/30 text-destructive">required</Badge>}
@@ -67,29 +73,29 @@ function ParamRow({ name, type, required, description }: { name: string; type: s
 
 function EnvToggle({ env, onChange }: { env: DexcomEnv; onChange: (env: DexcomEnv) => void }) {
   return (
-    <div className="flex items-center gap-1 p-0.5 rounded-lg bg-secondary/50 border border-border">
+    <div className="flex shrink-0 items-center gap-1 p-0.5 rounded-lg bg-secondary/50 border border-border">
       <button
         onClick={() => onChange("sandbox")}
         className={
-          "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-mono transition-all " +
+          "flex shrink-0 items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-mono whitespace-nowrap transition-all " +
           (env === "sandbox"
             ? "bg-amber-500/15 text-amber-400 border border-amber-500/30"
             : "text-muted-foreground hover:text-foreground")
         }
       >
-        <FlaskConical className="h-3 w-3" />
+        <FlaskConical className="h-3 w-3 shrink-0" />
         Sandbox
       </button>
       <button
         onClick={() => onChange("production")}
         className={
-          "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-mono transition-all " +
+          "flex shrink-0 items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-mono whitespace-nowrap transition-all " +
           (env === "production"
             ? "bg-green-500/15 text-green-400 border border-green-500/30"
             : "text-muted-foreground hover:text-foreground")
         }
       >
-        <Globe className="h-3 w-3" />
+        <Globe className="h-3 w-3 shrink-0" />
         Production
       </button>
     </div>
@@ -99,11 +105,11 @@ function EnvToggle({ env, onChange }: { env: DexcomEnv; onChange: (env: DexcomEn
 function TimezoneToggle({ timezone, onChange }: { timezone: TimezoneMode; onChange: (tz: TimezoneMode) => void }) {
   const localAbbr = getLocalTimezoneAbbr();
   return (
-    <div className="flex items-center gap-1 p-0.5 rounded-lg bg-secondary/50 border border-border">
+    <div className="flex shrink-0 items-center gap-1 p-0.5 rounded-lg bg-secondary/50 border border-border">
       <button
         onClick={() => onChange("utc")}
         className={
-          "flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-mono transition-all " +
+          "flex shrink-0 items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-mono whitespace-nowrap transition-all " +
           (timezone === "utc"
             ? "bg-blue-500/15 text-blue-400 border border-blue-500/30"
             : "text-muted-foreground hover:text-foreground")
@@ -114,7 +120,7 @@ function TimezoneToggle({ timezone, onChange }: { timezone: TimezoneMode; onChan
       <button
         onClick={() => onChange("local")}
         className={
-          "flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-mono transition-all " +
+          "flex shrink-0 items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-mono whitespace-nowrap transition-all " +
           (timezone === "local"
             ? "bg-blue-500/15 text-blue-400 border border-blue-500/30"
             : "text-muted-foreground hover:text-foreground")
@@ -294,26 +300,26 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-background">
       <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-50">
-        <div className="container flex items-center justify-between h-14">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-md bg-primary/10 flex items-center justify-center">
+        <div className="container flex flex-wrap items-center justify-between gap-y-2 py-2 sm:h-14 sm:flex-nowrap sm:py-0">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="w-8 h-8 shrink-0 rounded-md bg-primary/10 flex items-center justify-center">
               <Terminal className="h-4 w-4 text-primary" />
             </div>
-            <div>
+            <div className="min-w-0">
               <h1 className="text-sm font-semibold tracking-tight">Dexcom EGV Tester</h1>
-              <p className="text-[10px] font-mono text-muted-foreground">{baseUrl.replace("https://", "")}</p>
+              <p className="text-[10px] font-mono text-muted-foreground truncate">{baseUrl.replace("https://", "")}</p>
             </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:flex-nowrap sm:gap-3">
             <TimezoneToggle timezone={timezone} onChange={handleTimezoneChange} />
-            <Separator orientation="vertical" className="h-6" />
+            <Separator orientation="vertical" className="h-6 hidden sm:block" />
             <EnvToggle env={dexcomEnv} onChange={handleEnvChange} />
-            <Separator orientation="vertical" className="h-6" />
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-secondary/50 border border-border">
+            <Separator orientation="vertical" className="h-6 hidden sm:block" />
+            <div className="flex shrink-0 items-center gap-2 px-3 py-1.5 rounded-md bg-secondary/50 border border-border">
               {dexcomStatus.data?.connected ? (
-                <><Circle className="h-2 w-2 fill-green-400 text-green-400" /><span className="text-xs font-mono text-green-400">Connected</span></>
+                <><Circle className="h-2 w-2 shrink-0 fill-green-400 text-green-400" /><span className="text-xs font-mono text-green-400 whitespace-nowrap">Connected</span></>
               ) : (
-                <><Circle className="h-2 w-2 fill-muted-foreground text-muted-foreground" /><span className="text-xs font-mono text-muted-foreground">Disconnected</span></>
+                <><Circle className="h-2 w-2 shrink-0 fill-muted-foreground text-muted-foreground" /><span className="text-xs font-mono text-muted-foreground whitespace-nowrap">Disconnected</span></>
               )}
             </div>
           </div>
@@ -322,11 +328,11 @@ export default function Home() {
 
       <main className="container py-6">
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="bg-secondary/50 border border-border mb-6">
-            <TabsTrigger value="connect" className="font-mono text-xs data-[state=active]:bg-card"><Plug className="h-3.5 w-3.5 mr-1.5" />Connect</TabsTrigger>
-            <TabsTrigger value="data" className="font-mono text-xs data-[state=active]:bg-card" disabled={!dexcomStatus.data?.connected}><Activity className="h-3.5 w-3.5 mr-1.5" />EGV Data</TabsTrigger>
-            <TabsTrigger value="correlations" className="font-mono text-xs data-[state=active]:bg-card"><HeartPulse className="h-3.5 w-3.5 mr-1.5" />Health Correlations</TabsTrigger>
-            <TabsTrigger value="info" className="font-mono text-xs data-[state=active]:bg-card"><ExternalLink className="h-3.5 w-3.5 mr-1.5" />API Info</TabsTrigger>
+          <TabsList className="grid w-full grid-cols-2 h-auto gap-1 sm:inline-flex sm:w-fit sm:h-9 sm:gap-0 bg-secondary/50 border border-border mb-6">
+            <TabsTrigger value="connect" className={TAB_TRIGGER_CLS}><Plug className="h-3.5 w-3.5 mr-1.5 shrink-0" />Connect</TabsTrigger>
+            <TabsTrigger value="data" className={TAB_TRIGGER_CLS} disabled={!dexcomStatus.data?.connected}><Activity className="h-3.5 w-3.5 mr-1.5 shrink-0" />EGV Data</TabsTrigger>
+            <TabsTrigger value="correlations" className={TAB_TRIGGER_CLS}><HeartPulse className="h-3.5 w-3.5 mr-1.5 shrink-0" />Health Correlations</TabsTrigger>
+            <TabsTrigger value="info" className={TAB_TRIGGER_CLS}><ExternalLink className="h-3.5 w-3.5 mr-1.5 shrink-0" />API Info</TabsTrigger>
           </TabsList>
 
           <TabsContent value="connect" className="space-y-6">
@@ -393,8 +399,8 @@ export default function Home() {
                     <div>
                       <label className="text-xs font-mono text-muted-foreground block mb-1.5">Redirect URI (add this to your Dexcom app)</label>
                       <div className="flex gap-2">
-                        <code className="flex-1 px-3 py-2 rounded-md bg-[oklch(0.14_0.012_264)] border border-border text-xs font-mono text-primary break-all">{window.location.origin}/api/dexcom/callback</code>
-                        <Button variant="outline" size="sm" onClick={() => { navigator.clipboard.writeText(window.location.origin + "/api/dexcom/callback"); toast.success("Copied redirect URI"); }}>Copy</Button>
+                        <code className="flex-1 min-w-0 px-3 py-2 rounded-md bg-[oklch(0.14_0.012_264)] border border-border text-xs font-mono text-primary break-all">{window.location.origin}/api/dexcom/callback</code>
+                        <Button variant="outline" size="sm" className="shrink-0" onClick={() => { navigator.clipboard.writeText(window.location.origin + "/api/dexcom/callback"); toast.success("Copied redirect URI"); }}>Copy</Button>
                       </div>
                     </div>
                     <Separator />
@@ -439,14 +445,14 @@ export default function Home() {
           <TabsContent value="data" className="space-y-6">
             <Card className="bg-card border-border">
               <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <Activity className="h-4 w-4 text-primary" />EGV Query
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <CardTitle className="text-base flex flex-wrap items-center gap-2">
+                    <Activity className="h-4 w-4 shrink-0 text-primary" />EGV Query
                     {recordCount > 0 && <Badge variant="secondary" className="font-mono text-xs ml-2">{recordCount} records</Badge>}
                   </CardTitle>
-                  <div className="flex items-center gap-3">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                     {recordCount > 0 && (
-                      <div className="flex items-center gap-1">
+                      <div className="flex flex-wrap items-center gap-1">
                         <Button variant="outline" size="sm" onClick={handleExportCsv} className="h-7 px-2 text-xs font-mono gap-1.5">
                           <FileSpreadsheet className="h-3 w-3" />CSV
                         </Button>
@@ -458,8 +464,8 @@ export default function Home() {
                         </Button>
                       </div>
                     )}
-                    <div className="flex items-center gap-1.5 text-xs font-mono text-muted-foreground">
-                      <Clock className="h-3 w-3" />
+                    <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs font-mono text-muted-foreground">
+                      <Clock className="h-3 w-3 shrink-0" />
                       <span>Times shown in <span className="text-blue-400">{tzLabel}</span></span>
                       {timezone === "local" && <span className="text-[10px]">({localName})</span>}
                     </div>
@@ -519,21 +525,21 @@ export default function Home() {
               return (
               <Card className="bg-card border-border">
                 <CardHeader>
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <CardTitle className="text-base">Glucose Timeline <span className="text-xs font-mono text-muted-foreground ml-2">({tzLabel})</span></CardTitle>
                     {avgGlucose !== null && (
-                      <div className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-secondary/50 border border-border">
+                      <div className="flex shrink-0 items-center gap-2 px-3 py-1.5 rounded-md bg-secondary/50 border border-border">
                         <span className="text-xs font-mono text-muted-foreground">Avg:</span>
-                        <span className={"text-sm font-mono font-semibold " + (avgGlucose < 80 ? "text-red-400" : avgGlucose <= 180 ? "text-green-400" : "text-amber-400")}>{Math.round(avgGlucose)} mg/dL</span>
+                        <span className={"text-sm font-mono font-semibold whitespace-nowrap " + (avgGlucose < 80 ? "text-red-400" : avgGlucose <= 180 ? "text-green-400" : "text-amber-400")}>{Math.round(avgGlucose)} mg/dL</span>
                       </div>
                     )}
                   </div>
                 </CardHeader>
                 <CardContent>
                   <EgvChart ref={chartRef} records={egvQuery.data.records} timezone={timezone} />
-                  <div className="flex items-center gap-4 mt-4 text-xs font-mono text-muted-foreground">
-                    <div className="flex items-center gap-1.5"><div className="w-3 h-0.5 bg-[oklch(0.75_0.15_60)]" /><span>80 / 180 mg/dL thresholds</span></div>
-                    <div className="flex items-center gap-1.5"><div className="w-3 h-3 bg-[oklch(0.72_0.15_145)] opacity-10 rounded-sm" /><span>Target range</span></div>
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 mt-4 text-xs font-mono text-muted-foreground">
+                    <div className="flex items-center gap-1.5"><div className="w-3 h-0.5 shrink-0 bg-[oklch(0.75_0.15_60)]" /><span>80 / 180 mg/dL thresholds</span></div>
+                    <div className="flex items-center gap-1.5"><div className="w-3 h-3 shrink-0 bg-[oklch(0.72_0.15_145)] opacity-10 rounded-sm" /><span>Target range</span></div>
                   </div>
                 </CardContent>
               </Card>
@@ -587,10 +593,10 @@ export default function Home() {
                   <Separator />
                   <div>
                     <h4 className="text-xs text-muted-foreground mb-2">Trend Values</h4>
-                    <div className="grid grid-cols-2 gap-1 text-xs">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 text-xs">
                       {Object.entries(TREND_MAP).map(([key, { arrow, range }]) => (
                         <div key={key} className="flex items-center gap-2 py-0.5">
-                          <span className="w-5 text-center">{arrow}</span>
+                          <span className="w-6 shrink-0 text-center">{arrow}</span>
                           <span className="text-primary">{key}</span>
                           <span className="text-muted-foreground">{range}</span>
                         </div>
