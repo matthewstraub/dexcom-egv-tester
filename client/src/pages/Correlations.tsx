@@ -766,20 +766,20 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
               {filteredWorkouts.map((w: any, i: number) => (
                 <div
                   key={i}
-                  className="flex items-center justify-between bg-background/50 rounded-md p-2 border border-border/50 text-xs font-mono"
+                  className="flex flex-col gap-1 bg-background/50 rounded-md p-2 border border-border/50 text-xs font-mono sm:flex-row sm:items-center sm:justify-between sm:gap-2"
                 >
-                  <div className="flex items-center gap-2">
-                    <Dumbbell className="w-3 h-3 text-orange-400" />
+                  <div className="flex min-w-0 items-center gap-2">
+                    <Dumbbell className="w-3 h-3 shrink-0 text-orange-400" />
                     <span className="text-foreground font-medium">{w.activityLabel}</span>
                   </div>
-                  <div className="flex items-center gap-4 text-muted-foreground">
-                    <span className="flex items-center gap-1">
-                      <Clock className="w-3 h-3" />
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground sm:gap-x-4">
+                    <span className="flex items-center gap-1 whitespace-nowrap">
+                      <Clock className="w-3 h-3 shrink-0" />
                       {Math.round(w.duration)} min
                     </span>
                     {w.totalEnergyBurned && (
-                      <span className="flex items-center gap-1">
-                        <Flame className="w-3 h-3" />
+                      <span className="flex items-center gap-1 whitespace-nowrap">
+                        <Flame className="w-3 h-3 shrink-0" />
                         {Math.round(w.totalEnergyBurned)} kcal
                       </span>
                     )}
@@ -820,14 +820,14 @@ export default function Correlations({ dexcomEnv, timezone }: CorrelationsProps)
                     key={c.metric}
                     className="bg-background/50 rounded-md p-3 border border-border/50"
                   >
-                    <div className="flex items-center justify-between mb-1">
-                      <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 mb-1">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
                         <span style={{ color: info.color }} className="font-medium">
                           {info.label}
                         </span>
                         <span className="text-muted-foreground">({info.unit})</span>
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex shrink-0 items-center gap-2">
                         {isPositive ? (
                           <TrendingUp className="w-3 h-3 text-green-400" />
                         ) : c.correlation < 0 ? (

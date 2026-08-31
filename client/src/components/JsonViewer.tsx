@@ -25,23 +25,23 @@ export function JsonViewer({ data, title, maxHeight = "400px" }: JsonViewerProps
   return (
     <div className="rounded-lg border border-border bg-[oklch(0.14_0.012_264)] overflow-hidden">
       {title && (
-        <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-[oklch(0.17_0.015_264)]">
+        <div className="flex items-center justify-between gap-2 px-4 py-2 border-b border-border bg-[oklch(0.17_0.015_264)]">
           <button
             onClick={() => setCollapsed(!collapsed)}
-            className="flex items-center gap-2 text-sm font-mono text-muted-foreground hover:text-foreground transition-colors"
+            className="flex min-w-0 items-center gap-2 text-sm font-mono text-muted-foreground hover:text-foreground transition-colors"
           >
             {collapsed ? (
-              <ChevronRight className="h-3.5 w-3.5" />
+              <ChevronRight className="h-3.5 w-3.5 shrink-0" />
             ) : (
-              <ChevronDown className="h-3.5 w-3.5" />
+              <ChevronDown className="h-3.5 w-3.5 shrink-0" />
             )}
-            {title}
+            <span className="truncate">{title}</span>
           </button>
           <Button
             variant="ghost"
             size="sm"
             onClick={handleCopy}
-            className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
+            className="h-7 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground"
           >
             {copied ? (
               <Check className="h-3.5 w-3.5 mr-1 text-green-400" />
