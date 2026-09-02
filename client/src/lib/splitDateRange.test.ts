@@ -1,25 +1,5 @@
 import { describe, it, expect } from "vitest";
-
-/**
- * Inline copy of splitDateRange for testing (since it's defined inside a React component file).
- * This must match the implementation in Correlations.tsx.
- */
-function splitDateRange(startISO: string, endISO: string, maxDays: number = 7): Array<{ start: string; end: string }> {
-  const chunks: Array<{ start: string; end: string }> = [];
-  const startMs = new Date(startISO + (startISO.endsWith("Z") ? "" : "Z")).getTime();
-  const endMs = new Date(endISO + (endISO.endsWith("Z") ? "" : "Z")).getTime();
-  const chunkMs = maxDays * 24 * 60 * 60 * 1000;
-
-  let cursor = startMs;
-  while (cursor < endMs) {
-    const chunkEnd = Math.min(cursor + chunkMs, endMs);
-    const startStr = new Date(cursor).toISOString().slice(0, 19);
-    const endStr = new Date(chunkEnd).toISOString().slice(0, 19);
-    chunks.push({ start: startStr, end: endStr });
-    cursor = chunkEnd;
-  }
-  return chunks;
-}
+import { splitDateRange } from "./splitDateRange";
 
 describe("splitDateRange", () => {
   it("returns a single chunk for a range under maxDays", () => {
