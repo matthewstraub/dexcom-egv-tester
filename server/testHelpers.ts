@@ -6,7 +6,6 @@ import type { TrpcContext } from "./_core/context";
  */
 export function createMockContext(): TrpcContext {
   return {
-    user: null,
     req: {
       protocol: "https",
       headers: {},
