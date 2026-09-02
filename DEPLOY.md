@@ -60,7 +60,6 @@ Set these in your Render service's **Environment** tab:
 | `DATABASE_URL` | Yes | TiDB Cloud MySQL connection string |
 | `DEXCOM_CLIENT_ID` | Yes | Your Dexcom developer app Client ID |
 | `DEXCOM_CLIENT_SECRET` | Yes | Your Dexcom developer app Client Secret |
-| `JWT_SECRET` | Yes | Any random string for session signing (auto-generated if using render.yaml) |
 | `NODE_ENV` | Yes | Set to `production` |
 | `PORT` | No | Render sets this automatically |
 
@@ -114,5 +113,5 @@ Browser → Render (Node.js/Express) → Dexcom API
 
 - **Frontend**: React 19 + Tailwind CSS 4 (served as static files by Express)
 - **Backend**: Express 4 + tRPC 11 (handles OAuth flow and API proxying)
-- **Database**: TiDB Cloud Serverless (stores Dexcom OAuth tokens)
+- **Database**: TiDB Cloud Serverless (Dexcom OAuth tokens and Apple Health import results)
 - **Mode**: Single-user (no authentication required, one set of tokens stored globally)
