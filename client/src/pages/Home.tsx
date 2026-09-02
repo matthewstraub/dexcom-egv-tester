@@ -17,7 +17,7 @@ import {
   Image, Loader2, Plug, PlugZap, Terminal, Unplug, XCircle, Globe, FlaskConical, HeartPulse,
 } from "lucide-react";
 import { exportCsv, exportJson, exportChartPng, type ChartExportMeta } from "@/lib/export";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { DexcomEnv, TimezoneMode } from "../../../shared/const";
 import { DEXCOM_BASE_URLS } from "../../../shared/const";
@@ -265,17 +265,12 @@ export default function Home() {
   };
 
   const handleExportChart = async () => {
-    // Calculate average glucose for the export header
-    const records = egvQuery.data?.records || [];
-    const validValues = records.map((r: any) => r.value).filter((v: number) => typeof v === 'number' && !isNaN(v));
-    const avgGlucose = validValues.length > 0 ? validValues.reduce((sum: number, v: number) => sum + v, 0) / validValues.length : null;
-
     const meta: ChartExportMeta = {
       startDate: apiStartDate,
       endDate: apiEndDate,
       timezone,
       avgGlucose,
-      recordCount: records.length,
+      recordCount,
       env: dexcomEnv,
     };
     const success = await exportChartPng(chartRef.current, dexcomEnv, meta);
@@ -283,7 +278,24 @@ export default function Home() {
     else toast.error("Failed to export chart");
   };
 
-  const recordCount = egvQuery.data?.records?.length ?? 0;
+  const egvRecords: any[] | undefined = egvQuery.data?.records;
+  const recordCount = egvRecords?.length ?? 0;
+
+  // Single pass, memoized: this used to run map + filter + reduce inside JSX on
+  // every render, and again in the PNG export handler.
+  const avgGlucose = useMemo(() => {
+    if (!egvRecords?.length) return null;
+    let sum = 0;
+    let n = 0;
+    for (const r of egvRecords) {
+      const v = r.value;
+      if (typeof v === "number" && !isNaN(v)) {
+        sum += v;
+        n++;
+      }
+    }
+    return n > 0 ? sum / n : null;
+  }, [egvRecords]);
   const baseUrl = DEXCOM_BASE_URLS[dexcomEnv];
   const isProduction = dexcomEnv === "production";
 
@@ -518,11 +530,7 @@ export default function Home() {
               <Card className="bg-card border-destructive/50"><CardContent className="pt-6"><div className="flex items-start gap-3"><XCircle className="h-5 w-5 text-destructive shrink-0 mt-0.5" /><div><p className="text-sm font-medium text-destructive">API Error</p><p className="text-xs font-mono text-muted-foreground mt-1">{egvQuery.error.message}</p></div></div></CardContent></Card>
             )}
 
-            {egvQuery.data?.records && egvQuery.data.records.length > 0 && (() => {
-              const records = egvQuery.data.records;
-              const validValues = records.map((r: any) => r.value).filter((v: number) => typeof v === 'number' && !isNaN(v));
-              const avgGlucose = validValues.length > 0 ? validValues.reduce((sum: number, v: number) => sum + v, 0) / validValues.length : null;
-              return (
+            {recordCount > 0 && (
               <Card className="bg-card border-border">
                 <CardHeader>
                   <div className="flex flex-wrap items-center justify-between gap-2">
@@ -536,15 +544,14 @@ export default function Home() {
                   </div>
                 </CardHeader>
                 <CardContent>
-                  <EgvChart ref={chartRef} records={egvQuery.data.records} timezone={timezone} />
+                  <EgvChart ref={chartRef} records={egvRecords!} timezone={timezone} />
                   <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 mt-4 text-xs font-mono text-muted-foreground">
                     <div className="flex items-center gap-1.5"><div className="w-3 h-0.5 shrink-0 bg-[oklch(0.75_0.15_60)]" /><span>80 / 180 mg/dL thresholds</span></div>
                     <div className="flex items-center gap-1.5"><div className="w-3 h-3 shrink-0 bg-[oklch(0.72_0.15_145)] opacity-10 rounded-sm" /><span>Target range</span></div>
                   </div>
                 </CardContent>
               </Card>
-              );
-            })()}
+            )}
 
             {egvQuery.data && <JsonViewer data={egvQuery.data} title={`Response \u2014 GET /v3/users/self/egvs (${dexcomEnv})`} maxHeight="500px" />}
             {dataRange.data && <JsonViewer data={dataRange.data} title={`Response \u2014 GET /v3/users/self/dataRange (${dexcomEnv})`} maxHeight="300px" />}
