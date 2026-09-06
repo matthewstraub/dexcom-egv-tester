@@ -223,6 +223,10 @@ The glucose chart uses Recharts to render an interactive timeline with the follo
 
 The chart X-axis uses **smart axis labels** that adapt to the date range being displayed. When the data spans a single day or less, only times are shown (e.g., "02:30 PM"). When the data spans multiple days, the axis switches to a date+time format (e.g., "01/15 14:30") with slightly angled labels to prevent overlap.
 
+**Loading state**: while a query is in flight the chart is replaced by a placeholder card of identical height (`h-80`), carrying the section header, a stand-in for the average-glucose badge, and a status line naming the range being fetched ("Fetching 28 days of EGV data..."). Reserving the exact height means the page does not shift when the real chart arrives.
+
+The placeholder's animations are deliberately restricted to `opacity` and `transform` — `animate-pulse` on the placeholders, `animate-spin` on the status icon. This is a constraint, not a style choice. A wide query spends a substantial part of its wait with the main thread blocked (on a 28-day fetch, around 8,000 records, the longest single block measured was ~1.8s), and only compositor-driven properties keep animating through that. An indicator driven by JavaScript, or one animating a property that triggers layout or paint, would freeze during precisely the stretch where feedback matters most. Anything replacing this placeholder should preserve that restriction.
+
 ### 7.4 Export Options
 
 Three export formats are available once EGV data is loaded:
