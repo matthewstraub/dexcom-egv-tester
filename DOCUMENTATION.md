@@ -183,7 +183,8 @@ The table below maps each significant file to its responsibility in the applicat
 | `drizzle/schema.ts` | Database table definitions (`users`, `dexcom_tokens`) using Drizzle ORM |
 | `shared/const.ts` | Shared constants — Dexcom base URLs, environment types, timezone mode type, Apple Health metric definitions |
 | `server/appleHealth.ts` | `pearsonCorrelation()` and the `AggregatedBucket` type. The server-side XML parser that used to live here was removed when parsing moved to the browser |
-| `client/src/workers/appleHealthWorker.ts` | Web Worker that reads the Apple Health ZIP, streams `export.xml` through `DecompressionStream`, and aggregates into 15-minute buckets — all client-side |
+| `client/src/lib/appleHealthParse.ts` | The Apple Health pipeline: ZIP central-directory walk, `DecompressionStream` streaming, and 15-minute bucket aggregation. Plain functions with no worker globals, so it is unit-tested directly |
+| `client/src/workers/appleHealthWorker.ts` | Web Worker wrapper — reads the file and bridges `parseHealthExport` progress and results onto `postMessage`. Message plumbing only |
 | `client/src/lib/splitDateRange.ts` | Splits a date range into chunks of at most `maxDays` days for the correlation view's EGV fetches |
 | `client/src/pages/Correlations.tsx` | Health Correlations tab — file upload, metric toggles, date range, correlation results |
 | `client/src/components/CorrelationChart.tsx` | Recharts ComposedChart overlaying glucose with health metrics and workout reference areas |
@@ -238,7 +239,7 @@ The PNG export includes a header above the chart containing: the chart title wit
 
 The **Health Correlations** tab allows users to upload an Apple Health export (ZIP file containing `export.xml`) and overlay health metrics with EGV glucose data on a shared timeline.
 
-**Upload Flow**: Users export their health data from the Apple Health app on iPhone (Profile > Export All Health Data), which produces a ZIP file. **Everything is parsed in the browser** — the file is never uploaded. `client/src/workers/appleHealthWorker.ts` runs in a Web Worker, parses the ZIP central directory by hand to locate `export.xml`'s compressed bytes (Apple Health ZIPs use data descriptors, so the local header sizes are unusable), then streams those bytes through the browser's native `DecompressionStream("deflate-raw")` and scans the XML in chunks. Only the relevant metrics are extracted; other record types are skipped.
+**Upload Flow**: Users export their health data from the Apple Health app on iPhone (Profile > Export All Health Data), which produces a ZIP file. **Everything is parsed in the browser** — the file is never uploaded. `client/src/lib/appleHealthParse.ts` runs inside a Web Worker, parsing the ZIP central directory by hand to locate `export.xml`'s compressed bytes (Apple Health ZIPs use data descriptors, so the local header sizes are unusable), then streams those bytes through the browser's native `DecompressionStream("deflate-raw")` and scans the XML in chunks. Only the relevant metrics are extracted; other record types are skipped.
 
 This design exists because a 100 MB export expands to roughly 2 GB of XML — past V8's maximum string length, and far past what Render's 512 MB instance could hold. Parsing client-side removes the server from the equation entirely, regardless of file size. A real 102 MB export (2.1 GB of XML) parses in about 32 seconds with a ~169 MB peak, yielding ~3.6 M data points across 7 metrics.
 
@@ -387,10 +388,11 @@ Run the full test suite with:
 pnpm test
 ```
 
-There are 43 tests across six files:
+There are 71 tests across seven files:
 
 | File | Tests | Covers |
 |------|-------|--------|
+| `client/src/lib/appleHealthParse.test.ts` | 28 | ZIP central-directory parsing, date and attribute helpers, bucket aggregation, chunk-boundary invariance, and the full decompress-and-parse pipeline against a generated ZIP |
 | `server/appleHealth.test.ts` | 11 | Pearson correlation, and the `appleHealth` tRPC procedures with no data loaded |
 | `client/src/lib/export.test.ts` | 10 | CSV / JSON / PNG export helpers |
 | `client/src/lib/splitDateRange.test.ts` | 10 | Date-range chunking |
@@ -398,9 +400,9 @@ There are 43 tests across six files:
 | `server/dexcom.credentials.test.ts` | 2 | Dexcom credentials are configured |
 | `server/auth.logout.test.ts` | 1 | Session cookie is cleared on logout |
 
-**Four of these fail without a `.env`**: both `dexcom.credentials` tests assert the `DEXCOM_*` variables are non-empty, and two `dexcom.routers` tests need a live database connection. A clean local run is therefore **39 passed / 4 failed** — treat that as the baseline rather than a regression.
+**Four of these fail without a `.env`**: both `dexcom.credentials` tests assert the `DEXCOM_*` variables are non-empty, and two `dexcom.routers` tests need a live database connection. A clean local run is therefore **67 passed / 4 failed** — treat that as the baseline rather than a regression.
 
-Note that the 15-minute bucketing which actually ships runs in `client/src/workers/appleHealthWorker.ts` and has no test coverage. The server-side implementation that was tested is gone.
+The Apple Health tests need no browser environment: Node provides `DecompressionStream`, `ReadableStream` and `File` natively, so `appleHealthParse.test.ts` builds a real ZIP with `CompressionStream` and exercises the actual decompression path under vitest's `environment: "node"`.
 
 ### 11.8 Local Development
 

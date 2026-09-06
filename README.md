@@ -49,6 +49,7 @@ The server prefers port 3000 and scans upward if it's taken — watch the startu
 | `pnpm start` | Serve the production build |
 | `pnpm check` | Type-check with `tsc --noEmit` |
 | `pnpm test` | Run the Vitest suite |
+| `pnpm format` | Format with Prettier |
 | `pnpm db:push` | Generate and apply Drizzle migrations |
 
 Without a `DATABASE_URL` the app still boots, but the EGV Data tab stays disabled and four credential/database-dependent tests fail. That's expected locally.
@@ -72,9 +73,9 @@ Without a `DATABASE_URL` the app still boots, but the EGV Data tab stays disable
 ```
 client/src/
   pages/            Home (tabs), Correlations, NotFound
-  components/       EgvChart, CorrelationChart, JsonViewer, ui/ (shadcn)
-  lib/              timezone, export, splitDateRange, trpc
-  workers/          appleHealthWorker — browser-side ZIP + XML parsing
+  components/       EgvChart, CorrelationChart, JsonViewer, ErrorBoundary, ui/ (shadcn)
+  lib/              timezone, export, splitDateRange, appleHealthParse, trpc
+  workers/          appleHealthWorker — message plumbing around lib/appleHealthParse
 server/
   dexcom.ts         Dexcom service layer: tokens, refresh, API calls
   dexcomRoutes.ts   Express OAuth routes
