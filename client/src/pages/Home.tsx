@@ -4,6 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
 import { trpc } from "@/lib/trpc";
 import { EgvChart } from "@/components/EgvChart";
 import Correlations from "@/pages/Correlations";
@@ -37,6 +38,41 @@ const TREND_MAP: Record<string, { arrow: string; range: string }> = {
 // cell. From sm up we hand height and nowrap back to the Tabs primitive.
 const TAB_TRIGGER_CLS =
   "font-mono text-xs data-[state=active]:bg-card h-auto min-h-8 w-full whitespace-normal py-1.5 leading-tight sm:h-[calc(100%-1px)] sm:w-auto sm:whitespace-nowrap sm:py-1";
+
+/**
+ * Placeholder shown while an EGV query is in flight.
+ *
+ * Reserves the chart's exact height (h-80) so the page does not jump when the
+ * real chart lands. Both animations here are opacity/transform only —
+ * animate-pulse and animate-spin run on the compositor, so they keep moving
+ * through the main-thread work of rendering several thousand points, which is
+ * precisely the stretch a JS-driven indicator would freeze for.
+ */
+function EgvChartSkeleton({ days }: { days: number | null }) {
+  const label = days === null ? null : days >= 1 ? String(Math.round(days)) : days.toFixed(1);
+  return (
+    <Card className="bg-card border-border">
+      <CardHeader>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <CardTitle className="text-base text-muted-foreground">Glucose Timeline</CardTitle>
+          <Skeleton className="h-9 w-36 shrink-0 rounded-md" />
+        </div>
+      </CardHeader>
+      <CardContent>
+        <Skeleton className="w-full h-80 rounded-md" />
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-4 text-xs font-mono text-muted-foreground">
+          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+          <span>
+            Fetching{label ? <> <span className="text-foreground">{label} days</span> of</> : null} EGV data{"\u2026"}
+          </span>
+          {days !== null && days > 7 && (
+            <span className="text-[10px]">(large ranges can take a few seconds)</span>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
 function OAuthStep({ step, title, description, status }: { step: number; title: string; description: string; status: "pending" | "complete" | "ready" }) {
   const cls = status === "complete"
@@ -530,7 +566,9 @@ export default function Home() {
               <Card className="bg-card border-destructive/50"><CardContent className="pt-6"><div className="flex items-start gap-3"><XCircle className="h-5 w-5 text-destructive shrink-0 mt-0.5" /><div><p className="text-sm font-medium text-destructive">API Error</p><p className="text-xs font-mono text-muted-foreground mt-1">{egvQuery.error.message}</p></div></div></CardContent></Card>
             )}
 
-            {recordCount > 0 && (
+            {egvQuery.isFetching && <EgvChartSkeleton days={rangeDays} />}
+
+            {!egvQuery.isFetching && recordCount > 0 && (
               <Card className="bg-card border-border">
                 <CardHeader>
                   <div className="flex flex-wrap items-center justify-between gap-2">
