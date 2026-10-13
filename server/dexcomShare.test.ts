@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  AUTH_REJECTED_MAX_PAUSE_MS,
   AUTH_REJECTED_PAUSE_MS,
   AUTH_UNREACHABLE_PAUSE_MS,
   CACHE_TTL_MS,
@@ -146,6 +147,44 @@ describe("Share sign-in pause (account lockout protection)", () => {
     clock.t = T0 + AUTH_REJECTED_PAUSE_MS + 1;
     await client.getRecentReadings();
     expect(share.count("authenticate")).toBe(2);
+  });
+
+  it("waits longer after each rejection in a row, up to four hours", async () => {
+    const share = fakeShare({
+      authenticate: Array.from({ length: 7 }, () => shareError("AccountPasswordInvalid")),
+    });
+    const { client, clock } = makeClient(share);
+    const pauses: number[] = [];
+    for (let i = 0; i < 7; i++) {
+      await expect(client.getRecentReadings()).rejects.toThrow(/rejected/);
+      pauses.push((client.pausedUntil() - clock.t) / 60_000);
+      clock.t = client.pausedUntil() + 1;
+    }
+    expect(pauses).toEqual([15, 30, 60, 120, 240, 240, 240]);
+    expect(AUTH_REJECTED_MAX_PAUSE_MS).toBe(240 * 60_000);
+    expect(share.count("authenticate")).toBe(7);
+  });
+
+  it("starts the back-off over after a successful sign-in", async () => {
+    const reject = () => shareError("AccountPasswordInvalid");
+    const share = fakeShare({
+      authenticate: [reject(), reject()],
+      login: [SESSION_ID, reject()],
+      readings: [[shareReading(T0, 120)], shareError("SessionIdNotFound")],
+    });
+    const { client, clock } = makeClient(share);
+    for (const minutes of [15, 30]) {
+      await expect(client.getRecentReadings()).rejects.toThrow(/rejected/);
+      expect(client.pausedUntil() - clock.t).toBe(minutes * 60_000);
+      clock.t = client.pausedUntil() + 1;
+    }
+    await client.getRecentReadings();
+
+    // Later the session expires and the fresh sign-in is rejected: the
+    // shortest pause again, not the next step up.
+    clock.t += CACHE_TTL_MS + 1;
+    await expect(client.getRecentReadings()).rejects.toThrow(/rejected/);
+    expect(client.pausedUntil() - clock.t).toBe(AUTH_REJECTED_PAUSE_MS);
   });
 
   it("treats the all-zeros account id Dexcom returns for bad credentials as a rejection", async () => {

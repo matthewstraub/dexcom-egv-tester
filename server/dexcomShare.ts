@@ -12,8 +12,9 @@ import { ENV } from "./_core/env";
  *
  * Two rules shape this module:
  *  - Dexcom locks an account after repeated failed sign-ins, which would also
- *    break the wearer's Follow app. A failed login therefore pauses all login
- *    attempts instead of retrying on the next poll.
+ *    lock the wearer out. A failed login therefore pauses all login attempts
+ *    instead of retrying on the next poll, and each rejection in a row
+ *    pauses longer.
  *  - At most one Share read per minute per server, however many tabs are open.
  */
 
@@ -31,8 +32,13 @@ export const SHARE_MAX_MINUTES = 1440;
 export const SHARE_MAX_COUNT = 288;
 
 export const CACHE_TTL_MS = 60_000;
-/** Pause after Dexcom rejects a sign-in. Long, to stay clear of the lockout. */
+/**
+ * Pause after Dexcom rejects a sign-in. It doubles with each rejection in a
+ * row, up to the cap, so a password that has gone stale (say, the wearer
+ * changed it) costs a few attempts a day rather than one every 15 minutes.
+ */
 export const AUTH_REJECTED_PAUSE_MS = 15 * 60_000;
+export const AUTH_REJECTED_MAX_PAUSE_MS = 4 * 60 * 60_000;
 /** Pause after a sign-in attempt that never got an answer (network, timeout). */
 export const AUTH_UNREACHABLE_PAUSE_MS = 2 * 60_000;
 
@@ -208,6 +214,7 @@ export function createShareClient({
   let sessionId: string | null = null;
   let pausedUntil = 0;
   let pauseReason = "";
+  let rejectionsInARow = 0;
   let lastGood: { readings: ShareReading[]; at: number } | null = null;
   let inFlight: Promise<{ readings: ShareReading[]; at: number }> | null = null;
 
@@ -230,17 +237,22 @@ export function createShareClient({
       });
       if (typeof sid !== "string" || sid === NULL_UUID) throw new Error("rejected");
       sessionId = sid;
+      rejectionsInARow = 0;
       return sid;
     } catch (err) {
       // Never retry a failed sign-in on the next poll — see the module comment.
       accountId = null;
       sessionId = null;
       const rejected = gotResponse(err) || (err as Error)?.message === "rejected";
-      pausedUntil = now() + (rejected ? AUTH_REJECTED_PAUSE_MS : AUTH_UNREACHABLE_PAUSE_MS);
+      if (rejected) rejectionsInARow++;
+      const pauseMs = rejected
+        ? Math.min(AUTH_REJECTED_PAUSE_MS * 2 ** (rejectionsInARow - 1), AUTH_REJECTED_MAX_PAUSE_MS)
+        : AUTH_UNREACHABLE_PAUSE_MS;
+      pausedUntil = now() + pauseMs;
       pauseReason = describeLoginFailure(err);
       console.warn(
         `[Share] Sign-in failed (${shareErrorCode(err) ?? (rejected ? "rejected" : "unreachable")}); ` +
-          `pausing sign-in attempts for ${rejected ? 15 : 2} minutes`
+          `pausing sign-in attempts for ${Math.round(pauseMs / 60_000)} minutes`
       );
       throw new Error(pauseReason);
     }
