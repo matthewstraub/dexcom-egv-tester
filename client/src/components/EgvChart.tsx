@@ -12,6 +12,7 @@ import {
 } from "recharts";
 import type { TimezoneMode } from "../../../shared/const";
 import { formatTime, formatDateTime, formatDateTimeShort } from "@/lib/timezone";
+import { getGlucoseColor, TREND_ARROWS } from "@/lib/glucose";
 
 interface EgvRecord {
   recordId: string;
@@ -25,6 +26,7 @@ interface EgvRecord {
   rateUnit: string;
   displayDevice: string;
   transmitterGeneration: string;
+  source?: "official" | "share";
 }
 
 interface EgvChartProps {
@@ -32,41 +34,33 @@ interface EgvChartProps {
   timezone: TimezoneMode;
 }
 
-const TREND_ARROWS: Record<string, string> = {
-  doubleUp: "⬆⬆",
-  singleUp: "⬆",
-  fortyFiveUp: "↗",
-  flat: "→",
-  fortyFiveDown: "↘",
-  singleDown: "⬇",
-  doubleDown: "⬇⬇",
-  none: "",
-  notComputable: "?",
-  rateOutOfRange: "!",
-};
-
-function getGlucoseColor(value: number | null): string {
-  if (value === null) return "oklch(0.58 0.02 264)";
-  if (value < 54) return "oklch(0.65 0.25 25)"; // urgent low - red
-  if (value < 80) return "oklch(0.75 0.15 60)"; // low - amber
-  if (value <= 180) return "oklch(0.72 0.15 145)"; // in range - green
-  if (value <= 250) return "oklch(0.75 0.15 60)"; // high - amber
-  return "oklch(0.65 0.25 25)"; // very high - red
-}
-
 export const EgvChart = forwardRef<HTMLDivElement, EgvChartProps>(function EgvChart({ records, timezone }, ref) {
+  // Official and live readings are drawn as separate series: `value` (solid)
+  // and `liveValue` (dashed). The last official point carries both, so the
+  // dashed line picks up exactly where the solid one ends.
   const chartData = useMemo(() => {
-    return records
+    const points = records
       .filter(r => r.value !== null)
-      .map(r => ({
-        time: new Date(r.systemTime).getTime(),
-        value: r.value,
-        trend: r.trend,
-        trendRate: r.trendRate,
-        systemTime: r.systemTime,
-        displayTime: r.displayTime,
-      }))
+      .map(r => {
+        const live = r.source === "share";
+        return {
+          time: new Date(r.systemTime).getTime(),
+          glucose: r.value,
+          value: live ? null : r.value,
+          liveValue: live ? r.value : (null as number | null),
+          source: live ? ("share" as const) : ("official" as const),
+          trend: r.trend,
+          trendRate: r.trendRate,
+          systemTime: r.systemTime,
+          displayTime: r.displayTime,
+        };
+      })
       .sort((a, b) => a.time - b.time);
+    const firstLive = points.findIndex(p => p.source === "share");
+    if (firstLive > 0 && points[firstLive - 1]!.source === "official") {
+      points[firstLive - 1]!.liveValue = points[firstLive - 1]!.value;
+    }
+    return points;
   }, [records]);
 
   // Determine if the data spans multiple days
@@ -149,13 +143,14 @@ export const EgvChart = forwardRef<HTMLDivElement, EgvChartProps>(function EgvCh
                 <div className="bg-[oklch(0.19_0.016_264)] border border-border rounded-lg px-3 py-2 shadow-lg">
                   <div className="font-mono text-xs text-muted-foreground mb-1">
                     {formatDateTime(d.systemTime, timezone)}
+                    {d.source === "share" && <span className="ml-2 text-primary">Live · Dexcom Share</span>}
                   </div>
                   <div className="flex items-baseline gap-2">
                     <span
                       className="font-mono text-lg font-bold"
-                      style={{ color: getGlucoseColor(d.value) }}
+                      style={{ color: getGlucoseColor(d.glucose) }}
                     >
-                      {d.value}
+                      {d.glucose}
                     </span>
                     <span className="text-xs text-muted-foreground">mg/dL</span>
                     {trendArrow && (
@@ -176,6 +171,21 @@ export const EgvChart = forwardRef<HTMLDivElement, EgvChartProps>(function EgvCh
             dataKey="value"
             stroke="oklch(0.72 0.15 180)"
             strokeWidth={2}
+            dot={false}
+            activeDot={{
+              r: 4,
+              fill: "oklch(0.72 0.15 180)",
+              stroke: "oklch(0.16 0.014 264)",
+              strokeWidth: 2,
+            }}
+          />
+          <Line
+            type="monotone"
+            dataKey="liveValue"
+            name="Live (Dexcom Share)"
+            stroke="oklch(0.72 0.15 180)"
+            strokeWidth={2}
+            strokeDasharray="5 4"
             dot={false}
             activeDot={{
               r: 4,

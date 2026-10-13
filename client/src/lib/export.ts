@@ -16,6 +16,8 @@ interface EgvRecord {
   transmitterId?: string;
   displayApp?: string;
   transmitterTicks?: number;
+  /** "share" for live readings spliced in from Dexcom Share; official otherwise. */
+  source?: "official" | "share";
 }
 
 /**
@@ -64,6 +66,8 @@ export function exportCsv(
     "transmitterGeneration",
     "transmitterId",
     "recordId",
+    // Last, so tools reading earlier columns by position keep working.
+    "source",
   ];
 
   const rows = records.map((r) => {
@@ -83,6 +87,7 @@ export function exportCsv(
       r.transmitterGeneration,
       r.transmitterId ?? "",
       r.recordId,
+      r.source ?? "official",
     ]
       .map((v) => {
         const str = String(v);
@@ -115,6 +120,8 @@ export interface ChartExportMeta {
   timezone: TimezoneMode;
   avgGlucose: number | null;
   recordCount: number;
+  /** How many of the records are live Dexcom Share readings. */
+  liveCount?: number;
   env: string;
 }
 
@@ -229,7 +236,7 @@ export async function exportChartPng(
           ctx.fillText(`${startFormatted}  \u2192  ${endFormatted}`, padding, 50);
 
           // Stats line
-          const statsText = `Range: ${rangeLabel}  \u00B7  ${meta.recordCount.toLocaleString()} records  \u00B7  ${meta.env === "production" ? "Production" : "Sandbox"}`;
+          const statsText = `Range: ${rangeLabel}  \u00B7  ${meta.recordCount.toLocaleString()} records${meta.liveCount ? ` (${meta.liveCount} live)` : ""}  \u00B7  ${meta.env === "production" ? "Production" : "Sandbox"}`;
           ctx.fillText(statsText, padding, 68);
 
           // Separator line
