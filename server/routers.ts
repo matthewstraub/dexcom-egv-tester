@@ -12,6 +12,7 @@ import {
   fetchDataRange,
   disconnectDexcom,
 } from "./dexcom";
+import { getLatestShareResult } from "./dexcomShare";
 import { pearsonCorrelation } from "./appleHealth";
 import { getDb } from "./db";
 import {
@@ -88,6 +89,13 @@ export const appRouter = router({
           );
         }
       }),
+
+    /**
+     * The last 24 hours from Dexcom Share — live, unlike the official API,
+     * which runs an hour behind in the US. Never throws; problems come back
+     * in `error`, with the last good readings when there are any.
+     */
+    latest: viewerProcedure.query(() => getLatestShareResult()),
 
     /** Fetch EGV data for a given date range */
     egvs: viewerProcedure
