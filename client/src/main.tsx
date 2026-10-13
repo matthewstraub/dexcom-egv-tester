@@ -27,11 +27,18 @@ const trpcClient = trpc.createClient({
     httpBatchLink({
       url: "/api/trpc",
       transformer: superjson,
-      fetch(input, init) {
-        return globalThis.fetch(input, {
+      async fetch(input, init) {
+        const response = await globalThis.fetch(input, {
           ...(init ?? {}),
           credentials: "include",
         });
+        // The server answers 401 once a session expires; send the browser back
+        // through sign-in instead of leaving the page full of failed queries.
+        if (response.status === 401) {
+          const here = window.location.pathname + window.location.search;
+          window.location.assign(`/login?next=${encodeURIComponent(here)}`);
+        }
+        return response;
       },
     }),
   ],

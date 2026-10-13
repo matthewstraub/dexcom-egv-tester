@@ -1,49 +1,52 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// Never let these tests reach a real database. Without this, running the suite
+// with DATABASE_URL set would disconnect the production Dexcom account.
+vi.mock("./db", () => ({ getDb: async () => null }));
+
 import { appRouter } from "./routers";
-import type { TrpcContext } from "./_core/context";
+import { createAdminContext, createMockContext, createViewerContext } from "./testHelpers";
 
-/**
- * In single-user mode, all procedures are public (no auth required).
- * We use a null user context since the app no longer requires authentication.
- */
-function createPublicContext(): TrpcContext {
-  return {
-    user: null,
-    req: { protocol: "https", headers: {} } as TrpcContext["req"],
-    res: { clearCookie: () => {} } as unknown as TrpcContext["res"],
-  };
-}
-
-describe("dexcom routers (single-user mode)", () => {
-  it("dexcom.status works without authentication (sandbox)", async () => {
-    const caller = appRouter.createCaller(createPublicContext());
-    const result = await caller.dexcom.status({ env: "sandbox" });
-    expect(result).toHaveProperty("connected");
-    expect(result).toHaveProperty("environment");
-    expect(result.environment).toBe("sandbox");
+describe("dexcom routers — access", () => {
+  it("rejects a signed-out caller", async () => {
+    const caller = appRouter.createCaller(createMockContext(null));
+    await expect(caller.dexcom.status({ env: "production" })).rejects.toThrow(/Sign in required/);
   });
 
-  it("dexcom.status works without authentication (production)", async () => {
-    const caller = appRouter.createCaller(createPublicContext());
+  it("lets a viewer read connection status", async () => {
+    const caller = appRouter.createCaller(createViewerContext());
     const result = await caller.dexcom.status({ env: "production" });
     expect(result).toHaveProperty("connected");
     expect(result.environment).toBe("production");
   });
 
+  it("refuses dexcom.disconnect to a viewer", async () => {
+    const caller = appRouter.createCaller(createViewerContext());
+    await expect(caller.dexcom.disconnect({ env: "production" })).rejects.toThrow(/Admin password required/);
+  });
+
+  it("lets an admin through to dexcom.disconnect", async () => {
+    // Passing the access check means reaching the (mocked-absent) database.
+    const caller = appRouter.createCaller(createAdminContext());
+    await expect(caller.dexcom.disconnect({ env: "sandbox" })).rejects.toThrow(/Database not available/);
+  });
+});
+
+describe("dexcom routers — status and egvs", () => {
+  it("dexcom.status reports sandbox", async () => {
+    const caller = appRouter.createCaller(createViewerContext());
+    const result = await caller.dexcom.status({ env: "sandbox" });
+    expect(result.environment).toBe("sandbox");
+  });
+
   it("dexcom.status defaults to sandbox when env not provided", async () => {
-    const caller = appRouter.createCaller(createPublicContext());
+    const caller = appRouter.createCaller(createViewerContext());
     const result = await caller.dexcom.status();
     expect(result.environment).toBe("sandbox");
   });
 
-  it("dexcom.disconnect works without authentication", async () => {
-    const caller = appRouter.createCaller(createPublicContext());
-    const result = await caller.dexcom.disconnect({ env: "sandbox" });
-    expect(result).toEqual({ success: true });
-  });
-
   it("dexcom.egvs rejects date range exceeding 30 days", async () => {
-    const caller = appRouter.createCaller(createPublicContext());
+    const caller = appRouter.createCaller(createViewerContext());
     await expect(
       caller.dexcom.egvs({
         startDate: "2024-01-01T00:00:00",
@@ -54,7 +57,7 @@ describe("dexcom routers (single-user mode)", () => {
   });
 
   it("dexcom.egvs rejects when startDate is after endDate", async () => {
-    const caller = appRouter.createCaller(createPublicContext());
+    const caller = appRouter.createCaller(createViewerContext());
     await expect(
       caller.dexcom.egvs({
         startDate: "2024-01-15T00:00:00",
@@ -65,7 +68,7 @@ describe("dexcom routers (single-user mode)", () => {
   });
 
   it("dexcom.egvs rejects invalid date format", async () => {
-    const caller = appRouter.createCaller(createPublicContext());
+    const caller = appRouter.createCaller(createViewerContext());
     await expect(
       caller.dexcom.egvs({
         startDate: "not-a-date",
@@ -76,10 +79,7 @@ describe("dexcom routers (single-user mode)", () => {
   });
 
   it("dexcom.egvs returns 'Not connected' when no tokens exist", async () => {
-    // First disconnect to ensure no tokens exist for sandbox
-    const caller = appRouter.createCaller(createPublicContext());
-    await caller.dexcom.disconnect({ env: "sandbox" });
-    await caller.dexcom.disconnect({ env: "production" });
+    const caller = appRouter.createCaller(createViewerContext());
     await expect(
       caller.dexcom.egvs({
         startDate: "2024-01-01T00:00:00",
@@ -88,10 +88,18 @@ describe("dexcom routers (single-user mode)", () => {
       })
     ).rejects.toThrow(/Not connected to Dexcom/);
   });
+});
 
-  it("auth.me returns null in single-user mode", async () => {
-    const caller = appRouter.createCaller(createPublicContext());
-    const result = await caller.auth.me();
-    expect(result).toBeNull();
+describe("auth.me", () => {
+  it("reports the caller's role", async () => {
+    const caller = appRouter.createCaller(createViewerContext());
+    const me = await caller.auth.me();
+    expect(me.role).toBe("viewer");
+  });
+
+  it("reports null for a signed-out caller", async () => {
+    const caller = appRouter.createCaller(createMockContext(null));
+    const me = await caller.auth.me();
+    expect(me.role).toBeNull();
   });
 });

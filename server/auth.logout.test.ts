@@ -21,6 +21,7 @@ function createContext(): { ctx: TrpcContext; clearedCookies: CookieCall[] } {
         clearedCookies.push({ name, options });
       },
     } as TrpcContext["res"],
+    role: "viewer",
   };
 
   return { ctx, clearedCookies };
@@ -39,7 +40,7 @@ describe("auth.logout", () => {
     expect(clearedCookies[0]?.options).toMatchObject({
       maxAge: -1,
       secure: true,
-      sameSite: "none",
+      sameSite: "lax",
       httpOnly: true,
       path: "/",
     });

@@ -1,6 +1,9 @@
+import crypto from "node:crypto";
 import type { Express, Request, Response } from "express";
 import { exchangeCodeForTokens, getDexcomAuthUrl, saveDexcomTokens } from "./dexcom";
 import type { DexcomEnv } from "@shared/const";
+import { getSessionCookieOptions } from "./_core/cookies";
+import { readCookie, safeEqual } from "./_core/session";
 
 /**
  * Single-user mode: all Dexcom tokens are stored under this fixed user ID.
@@ -37,12 +40,36 @@ function extractDexcomError(err: any): string {
   return "token_exchange_failed";
 }
 
+/** Short-lived, single-use value binding an OAuth flow to the browser that started it. */
+const NONCE_COOKIE = "dexcom_oauth_nonce";
+const NONCE_PATH = "/api/dexcom/callback";
+const NONCE_MAX_AGE_MS = 10 * 60 * 1000;
+
+type OAuthState = { origin: string; env: DexcomEnv; nonce: string };
+
+function parseState(state: unknown): OAuthState | null {
+  if (typeof state !== "string" || !state) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(state, "base64").toString());
+    if (typeof parsed?.origin !== "string" || typeof parsed?.nonce !== "string") return null;
+    return {
+      origin: parsed.origin,
+      env: parsed.env === "production" ? "production" : "sandbox",
+      nonce: parsed.nonce,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Register Dexcom OAuth routes on the Express app.
  * These are standard Express routes (not tRPC) because the Dexcom OAuth
  * redirect callback needs to be a plain GET endpoint.
  *
- * Single-user mode: no authentication required.
+ * Both routes are admin-only: there is one stored Dexcom connection, and
+ * whoever completes this flow replaces it. requireSession runs first and
+ * leaves the caller's role on res.locals.
  */
 export function registerDexcomRoutes(app: Express) {
   /**
@@ -52,6 +79,10 @@ export function registerDexcomRoutes(app: Express) {
    * Accepts ?origin=...&env=sandbox|production
    */
   app.get("/api/dexcom/authorize", async (req: Request, res: Response) => {
+    if (res.locals.role !== "admin") {
+      res.status(403).json({ error: "Admin password required" });
+      return;
+    }
     try {
       const origin = req.query.origin as string;
       if (!origin) {
@@ -65,8 +96,18 @@ export function registerDexcomRoutes(app: Express) {
         return;
       }
 
+      // The nonce lives in this browser's cookie and in the state Dexcom echoes
+      // back. A callback carrying someone else's state won't match, which stops
+      // a crafted link from swapping in another Dexcom account.
+      const nonce = crypto.randomBytes(16).toString("hex");
+      res.cookie(NONCE_COOKIE, nonce, {
+        ...getSessionCookieOptions(req),
+        path: NONCE_PATH,
+        maxAge: NONCE_MAX_AGE_MS,
+      });
+
       const redirectUri = `${origin}/api/dexcom/callback`;
-      const state = Buffer.from(JSON.stringify({ origin, env })).toString("base64");
+      const state = Buffer.from(JSON.stringify({ origin, env, nonce })).toString("base64");
       const authUrl = getDexcomAuthUrl(redirectUri, env, state);
 
       res.json({ authUrl, redirectUri, env });
@@ -80,42 +121,40 @@ export function registerDexcomRoutes(app: Express) {
    * GET /api/dexcom/callback
    * Handles the OAuth callback from Dexcom.
    * Exchanges the authorization code for tokens and stores them.
-   * No authentication required — single-user mode.
+   *
+   * Every redirect here is same-origin and relative, so nothing in the
+   * echoed state can send the browser elsewhere.
    */
   app.get("/api/dexcom/callback", async (req: Request, res: Response) => {
+    const { code, state, error: oauthError } = req.query;
+    const parsed = parseState(state);
+    const env: DexcomEnv = parsed?.env ?? "sandbox";
+    const fail = (message: string) =>
+      res.redirect(`/?dexcom_error=${encodeURIComponent(message)}&env=${env}`);
+
+    // Single use: whatever happens next, this nonce is spent.
+    const cookieNonce = readCookie(req, NONCE_COOKIE);
+    res.clearCookie(NONCE_COOKIE, { ...getSessionCookieOptions(req), path: NONCE_PATH });
+
+    if (res.locals.role !== "admin") {
+      fail("Admin sign-in is required to connect Dexcom");
+      return;
+    }
+    if (!parsed || !cookieNonce || !safeEqual(parsed.nonce, cookieNonce)) {
+      fail("This sign-in link has expired or wasn't started here. Please connect again.");
+      return;
+    }
+    if (oauthError) {
+      fail(String(oauthError));
+      return;
+    }
+    if (!code || typeof code !== "string") {
+      fail("missing_code");
+      return;
+    }
+
     try {
-      const { code, state, error: oauthError } = req.query;
-
-      // Parse origin and env from state early so error redirects go to the right place
-      let origin = "";
-      let env: DexcomEnv = "sandbox";
-      if (state && typeof state === "string") {
-        try {
-          const parsed = JSON.parse(Buffer.from(state, "base64").toString());
-          origin = parsed.origin || "";
-          env = parsed.env === "production" ? "production" : "sandbox";
-        } catch {
-          // fallback
-        }
-      }
-
-      const redirectBase = origin || `${req.protocol}://${req.get("host")}`;
-
-      if (oauthError) {
-        res.redirect(`${redirectBase}/?dexcom_error=${encodeURIComponent(oauthError as string)}&env=${env}`);
-        return;
-      }
-
-      if (!code || typeof code !== "string") {
-        res.redirect(`${redirectBase}/?dexcom_error=missing_code&env=${env}`);
-        return;
-      }
-
-      const redirectUri = origin
-        ? `${origin}/api/dexcom/callback`
-        : `${req.protocol}://${req.get("host")}/api/dexcom/callback`;
-
-      // Exchange code for tokens
+      const redirectUri = `${parsed.origin}/api/dexcom/callback`;
       const tokens = await exchangeCodeForTokens(code, redirectUri, env);
 
       // Save tokens to database under the single-user ID
@@ -127,28 +166,10 @@ export function registerDexcomRoutes(app: Express) {
         env
       );
 
-      // Redirect back to the app with success and env info
-      res.redirect(`${redirectBase}/?dexcom_connected=true&env=${env}`);
+      res.redirect(`/?dexcom_connected=true&env=${env}`);
     } catch (err: any) {
       console.error("[Dexcom] Callback error:", err?.response?.data || err);
-
-      // Parse origin/env from state for the error redirect
-      let origin = "";
-      let env: DexcomEnv = "sandbox";
-      const stateParam = req.query.state;
-      if (stateParam && typeof stateParam === "string") {
-        try {
-          const parsed = JSON.parse(Buffer.from(stateParam, "base64").toString());
-          origin = parsed.origin || "";
-          env = parsed.env === "production" ? "production" : "sandbox";
-        } catch {
-          // fallback
-        }
-      }
-
-      const redirectBase = origin || `${req.protocol}://${req.get("host")}`;
-      const errorMsg = extractDexcomError(err);
-      res.redirect(`${redirectBase}/?dexcom_error=${encodeURIComponent(errorMsg)}&env=${env}`);
+      fail(extractDexcomError(err));
     }
   });
 }
