@@ -14,3 +14,13 @@ services:
         sync: false
       - key: DEXCOM_CLIENT_SECRET
         sync: false
+      - key: VIEWER_PASSWORD
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: DEXCOM_SHARE_USERNAME
+        sync: false
+      - key: DEXCOM_SHARE_PASSWORD
+        sync: false

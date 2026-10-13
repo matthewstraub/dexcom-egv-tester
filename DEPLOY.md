@@ -37,6 +37,10 @@ This guide walks through deploying the Dexcom EGV Tester to **Render** (hosting)
    - `DATABASE_URL` — your TiDB Cloud connection string
    - `DEXCOM_CLIENT_ID` — from your Dexcom developer app
    - `DEXCOM_CLIENT_SECRET` — from your Dexcom developer app
+   - `VIEWER_PASSWORD` and `ADMIN_PASSWORD` — choose two different passwords (Step 3)
+   - `DEXCOM_SHARE_USERNAME` and `DEXCOM_SHARE_PASSWORD` — optional, for live data; leave them blank to skip it
+
+   Render generates `SESSION_SECRET` itself.
 5. Click **Apply** to deploy.
 
 ### Option B: Manual Setup
@@ -60,8 +64,19 @@ Set these in your Render service's **Environment** tab:
 | `DATABASE_URL` | Yes | TiDB Cloud MySQL connection string |
 | `DEXCOM_CLIENT_ID` | Yes | Your Dexcom developer app Client ID |
 | `DEXCOM_CLIENT_SECRET` | Yes | Your Dexcom developer app Client Secret |
+| `VIEWER_PASSWORD` | Yes | Opens the site: the EGV Data tab and the live card |
+| `ADMIN_PASSWORD` | Recommended | Also opens Connect, Health Correlations and API Info. Use a different password from the viewer one |
+| `SESSION_SECRET` | Yes | A long random value that signs session cookies, e.g. `openssl rand -hex 32`. The Blueprint generates one; a manually created service needs it set by hand |
+| `DEXCOM_SHARE_USERNAME` | No | The CGM wearer's own Dexcom username, for live data. Only with the wearer's agreement |
+| `DEXCOM_SHARE_PASSWORD` | No | Password for that account |
 | `NODE_ENV` | Yes | Set to `production` |
 | `PORT` | No | Render sets this automatically |
+
+Without `VIEWER_PASSWORD` and `SESSION_SECRET`, the deployed site shows a "not configured" page instead of the app. It fails closed, never open.
+
+### Upgrading an existing deployment to sign-in
+
+Versions before sign-in had no passwords. Before merging a version that has them, add `VIEWER_PASSWORD`, `ADMIN_PASSWORD` and `SESSION_SECRET` to the service's **Environment** tab (plus the two Share variables, if you want live data), then deploy. Depending on how the service was created, new entries in `render.yaml` may not be applied to it, so check the Environment tab rather than assuming. Anyone who used the site before then needs the viewer password.
 
 ---
 
@@ -80,10 +95,12 @@ The app will also display the correct redirect URI on the **Connect** tab — yo
 
 ## Step 5: Verify Deployment
 
-1. Visit your Render URL.
-2. You should see the Dexcom EGV Tester interface immediately (no login required).
+1. Visit your Render URL. You should see the sign-in page, and nothing else.
+2. Sign in with the admin password. The full interface should appear, with an **Admin** badge in the header.
 3. Switch between Sandbox and Production environments using the toggle.
 4. Click **Connect to Dexcom Sandbox** to test the OAuth flow.
+5. If the Share variables are set, switch back to Production: a **Current glucose** card should appear above the tabs within a few seconds.
+6. Sign out, sign in with the viewer password, and confirm Connect, Health Correlations and API Info show **Admin only**.
 
 ---
 
@@ -101,17 +118,23 @@ The app will also display the correct redirect URI on the **Connect** tab — yo
 ### "Max user count exceeded" on production
 - Your Dexcom production app has a user limit. Contact Dexcom developer support to request an increase.
 
+### The site shows "not configured"
+- `VIEWER_PASSWORD` or `SESSION_SECRET` is missing. The page lists which; add them in the Environment tab and Render redeploys.
+
+### The live card says Dexcom rejected the Share username or password
+- `DEXCOM_SHARE_USERNAME` / `DEXCOM_SHARE_PASSWORD` must be the CGM wearer's own, current Dexcom login. Fix them promptly: the server keeps retrying with growing pauses, and repeated failures can get the account locked. Saving the corrected values redeploys the service, which also clears the pause.
+
 ---
 
 ## Architecture
 
 ```
-Browser → Render (Node.js/Express) → Dexcom API
+Browser → Render (Node.js/Express) → Dexcom API, Dexcom Share (optional)
                     ↕
               TiDB Cloud (MySQL)
 ```
 
 - **Frontend**: React 19 + Tailwind CSS 4 (served as static files by Express)
-- **Backend**: Express 4 + tRPC 11 (handles OAuth flow and API proxying)
+- **Backend**: Express 4 + tRPC 11 (handles sign-in, the OAuth flow and API proxying)
 - **Database**: TiDB Cloud Serverless (Dexcom OAuth tokens and Apple Health import results)
-- **Mode**: Single-user (no authentication required, one set of tokens stored globally)
+- **Access**: Password sign-in with viewer and admin roles; one set of Dexcom tokens stored per environment
