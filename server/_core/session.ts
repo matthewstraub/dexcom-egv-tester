@@ -194,7 +194,16 @@ export function createLoginLimiter({ maxFailures = 10, windowMs = 15 * 60 * 1000
   };
 }
 
+/**
+ * Two limits on failed sign-ins. Per address, the address comes from
+ * X-Forwarded-For behind Render's proxy, and a client can add its own entries
+ * to that header, so this limit is only best effort. The overall limit is the
+ * backstop no header can dodge: it caps guesses for everyone at once. Hitting
+ * it pauses new sign-ins only; existing sessions carry on.
+ */
 const loginLimiter = createLoginLimiter();
+const overallLoginLimiter = createLoginLimiter({ maxFailures: 30 });
+const OVERALL = "*";
 
 // ── Pages ──
 
@@ -323,7 +332,12 @@ export function handleSignInPage(req: Request, res: Response) {
     .send(renderSignInPage({ next: safeNextPath(req.query.next), wantAdmin: req.query.admin === "1" }));
 }
 
-export function handleSignIn(req: Request, res: Response, limiter = loginLimiter) {
+export function handleSignIn(
+  req: Request,
+  res: Response,
+  limiter = loginLimiter,
+  overallLimiter = overallLoginLimiter
+) {
   const state = resolveAuthState();
   privatePage(res);
   if (state.mode === "misconfigured") {
@@ -339,7 +353,7 @@ export function handleSignIn(req: Request, res: Response, limiter = loginLimiter
   const wantAdmin = req.body?.want === "admin";
   const ip = clientIp(req);
 
-  if (limiter.isLimited(ip)) {
+  if (limiter.isLimited(ip) || overallLimiter.isLimited(OVERALL)) {
     res
       .status(429)
       .type("html")
@@ -354,7 +368,11 @@ export function handleSignIn(req: Request, res: Response, limiter = loginLimiter
 
   if (!granted) {
     limiter.recordFailure(ip);
+    overallLimiter.recordFailure(OVERALL);
     console.warn(`[Auth] Failed ${wantAdmin ? "admin " : ""}sign-in`);
+    if (overallLimiter.isLimited(OVERALL)) {
+      console.warn("[Auth] Too many failed sign-ins overall; refusing new sign-ins for up to 15 minutes");
+    }
     res
       .status(401)
       .type("html")

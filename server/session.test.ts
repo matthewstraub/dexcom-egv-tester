@@ -271,9 +271,15 @@ describe("requireSession", () => {
 });
 
 describe("handleSignIn", () => {
-  const signIn = (body: Record<string, string>, limiter = createLoginLimiter()) => {
+  const signIn = (
+    body: Record<string, string>,
+    limiter = createLoginLimiter(),
+    overall = createLoginLimiter({ maxFailures: 1000 }),
+    from?: string
+  ) => {
     const res = mockRes();
-    handleSignIn(mockReq({ body }), res, limiter);
+    const headers = from ? { "x-forwarded-for": from } : {};
+    handleSignIn(mockReq({ body, headers } as Partial<Request>), res, limiter, overall);
     return res;
   };
 
@@ -324,6 +330,30 @@ describe("handleSignIn", () => {
     const res = signIn({ password: VIEWER }, limiter);
     expect(res.statusCode).toBe(429);
     expect(res.cookies).toHaveLength(0);
+  });
+
+  it("caps failures overall, so a forged X-Forwarded-For can't dodge the limit", () => {
+    enforce();
+    const perAddress = createLoginLimiter({ maxFailures: 2 });
+    const overall = createLoginLimiter({ maxFailures: 5 });
+    // A fresh made-up address on every guess never trips the per-address limit...
+    for (let i = 0; i < 5; i++) {
+      expect(signIn({ password: "wrong" }, perAddress, overall, `198.51.100.${i}`).statusCode).toBe(401);
+    }
+    // ...but the overall cap holds, even for the right password from a new address.
+    const res = signIn({ password: VIEWER }, perAddress, overall, "198.51.100.99");
+    expect(res.statusCode).toBe(429);
+    expect(res.cookies).toHaveLength(0);
+  });
+
+  it("doesn't let a successful sign-in reset the overall count", () => {
+    enforce();
+    const overall = createLoginLimiter({ maxFailures: 3 });
+    signIn({ password: "wrong" }, undefined, overall, "198.51.100.1");
+    signIn({ password: "wrong" }, undefined, overall, "198.51.100.2");
+    expect(signIn({ password: VIEWER }, undefined, overall, "203.0.113.50").cookies).toHaveLength(1);
+    signIn({ password: "wrong" }, undefined, overall, "198.51.100.3");
+    expect(signIn({ password: VIEWER }, undefined, overall, "203.0.113.50").statusCode).toBe(429);
   });
 
   it("escapes next when re-rendering the form", () => {

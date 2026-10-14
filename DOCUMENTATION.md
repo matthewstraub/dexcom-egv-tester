@@ -350,7 +350,7 @@ The site's address isn't secret and its data is real, so the whole application s
 - **One sign-in page, one password box** (`/login`). Whichever password matches decides the role, and both comparisons always run, in constant time. The page is self-contained HTML with no scripts, served with `noindex` and `no-store` headers.
 - **Admin tabs** show a viewer an "Admin only" card, with a password box that upgrades the session in place. The server enforces the same split independently of the UI: `dexcom.disconnect` and every `appleHealth.*` procedure are `adminProcedure`s (`server/_core/trpc.ts`), and both OAuth routes check for admin too, so a viewer can neither change nor take over the Dexcom connection.
 - **Sessions** are a signed cookie, `app_session_id`, holding the role and issue time with an HMAC-SHA256 under `SESSION_SECRET`. It is HttpOnly, `SameSite=Lax`, and Secure over HTTPS. The key is random rather than derived from a password, so a cookie reveals nothing about either password. Changing `SESSION_SECRET` signs everyone out; removing `ADMIN_PASSWORD` turns admin sessions into viewer sessions.
-- **Rate limit**: after 10 failed sign-ins from one IP within 15 minutes, further attempts are refused until the window passes. The count is held in memory.
+- **Rate limits**: after 10 failed sign-ins from one address within 15 minutes, further attempts from it are refused until the window passes. Behind Render's proxy the address comes from `X-Forwarded-For`, and a client can add its own entries to that header, so there is also an overall cap: 30 failed sign-ins from anywhere within 15 minutes pause all new sign-ins for the rest of that window. That bounds guessing however the header is forged, and existing sessions are unaffected. Both counts are held in memory.
 - **Signed-out requests**: pages redirect to `/login?next=…`, where `next` must be a same-site path, so the redirect can't be used to send someone elsewhere. API calls get a `401`, and the client sends the browser to sign-in when it sees one.
 - **Fail closed.** In production, a missing `VIEWER_PASSWORD` or `SESSION_SECRET` shows a "not configured" page (HTTP 503) rather than serving the site openly. In development, an unset `VIEWER_PASSWORD` disables sign-in with a warning at startup, and every visitor is treated as admin.
 
@@ -460,7 +460,8 @@ Render provides built-in logging. You can view server logs in the Render dashboa
 | `[Auth] Site locked: missing …` | Production is missing `VIEWER_PASSWORD` or `SESSION_SECRET`; the site shows "not configured" until they're set |
 | `[Auth] ADMIN_PASSWORD is not set` | The admin tabs are locked for everyone |
 | `[Auth] VIEWER_PASSWORD and ADMIN_PASSWORD are identical` | Everyone who signs in gets admin — set two different passwords |
-| `[Auth] Failed sign-in` / `Failed admin sign-in` | A wrong password was entered; 10 from one IP within 15 minutes trigger the rate limit |
+| `[Auth] Failed sign-in` / `Failed admin sign-in` | A wrong password was entered; 10 from one address, or 30 overall, within 15 minutes trigger the rate limits |
+| `[Auth] Too many failed sign-ins overall` | 30 failures in 15 minutes, most likely someone guessing. New sign-ins are refused until the window passes; existing sessions keep working |
 | `[Share] Sign-in failed (<code>); pausing sign-in attempts for N minutes` | Dexcom Share rejected the sign-in or didn't answer. A rejection usually means `DEXCOM_SHARE_PASSWORD` is out of date (§11.1) |
 | `[Share] Read failed:` | A Share read failed for another reason; the live card keeps showing the last good readings |
 
@@ -478,11 +479,11 @@ Run the full test suite with:
 pnpm test
 ```
 
-There are 146 tests across ten files:
+There are 150 tests across ten files:
 
 | File | Tests | Covers |
 |------|-------|--------|
-| `server/session.test.ts` | 29 | Auth-state resolution (fail-closed in production, open in development), passwords to roles, session tokens (signing, tampering, expiry), `next` validation, the sign-in limiter, and the gate and sign-in handlers |
+| `server/session.test.ts` | 31 | Auth-state resolution (fail-closed in production, open in development), passwords to roles, session tokens (signing, tampering, expiry), `next` validation, the per-address and overall sign-in limits, and the gate and sign-in handlers |
 | `client/src/lib/appleHealthParse.test.ts` | 28 | ZIP central-directory parsing, date and attribute helpers, bucket aggregation, chunk-boundary invariance, and the full decompress-and-parse pipeline against a generated ZIP |
 | `server/dexcomShare.test.ts` | 25 | The Share sign-in sequence and its exact request bodies, session expiry, the sign-in back-off, caching and request coalescing, timestamp and trend parsing, and `dexcom.latest` |
 | `client/src/lib/mergeLiveReadings.test.ts` | 18 | Windowing, de-duplication at the seam, ordering, the consistency guard, open-ended windows, and Sandbox exclusion |
@@ -493,7 +494,7 @@ There are 146 tests across ten files:
 | `server/dexcom.credentials.test.ts` | 2 | Dexcom credentials are configured |
 | `server/auth.logout.test.ts` | 1 | Session cookie is cleared on logout |
 
-**Two of these fail without Dexcom credentials**: both `dexcom.credentials` tests assert the `DEXCOM_*` variables are non-empty. A clean local run is therefore **144 passed / 2 failed** — treat that as the baseline rather than a regression. Nothing else needs a database or network: the router and Apple Health tests mock `getDb()`, the Share client tests use a scripted transport, and the `dexcom.latest` tests blank the Share credentials, so no test contacts Dexcom.
+**Two of these fail without Dexcom credentials**: both `dexcom.credentials` tests assert the `DEXCOM_*` variables are non-empty. A clean local run is therefore **148 passed / 2 failed** — treat that as the baseline rather than a regression. Nothing else needs a database or network: the router and Apple Health tests mock `getDb()`, the Share client tests use a scripted transport, and the `dexcom.latest` tests blank the Share credentials, so no test contacts Dexcom.
 
 The Apple Health tests need no browser environment: Node provides `DecompressionStream`, `ReadableStream` and `File` natively, so `appleHealthParse.test.ts` builds a real ZIP with `CompressionStream` and exercises the actual decompression path under vitest's `environment: "node"`.
 
