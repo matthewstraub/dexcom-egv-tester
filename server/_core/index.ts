@@ -32,9 +32,11 @@ async function startServer() {
   const app = express();
   const server = createServer(app);
 
-  // Configure body parser with larger size limit for other routes
-  app.use(express.json({ limit: "50mb" }));
-  app.use(express.urlencoded({ limit: "50mb", extended: true }));
+  // Request bodies are small: the sign-in form and a couple of tRPC mutations.
+  // These parsers run before the sign-in gate, so keep the limits tight. (The
+  // old 50mb limit existed only for Apple Health uploads, since removed.)
+  app.use(express.json({ limit: "100kb" }));
+  app.use(express.urlencoded({ limit: "10kb", extended: true }));
   // Sign-in page, then the gate. Everything registered below it — API, OAuth
   // routes and the client itself — requires a session.
   registerSessionRoutes(app);

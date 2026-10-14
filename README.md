@@ -1,8 +1,8 @@
 # Dexcom EGV Tester
 
-A developer tool for exercising the [Dexcom API](https://developer.dexcom.com/docs). Authenticate via OAuth2 against the Sandbox or Production environment, pull Estimated Glucose Values, inspect the raw responses, and correlate glucose against Apple Health metrics. In Production it can also show the current reading from Dexcom Share, which the official API delays by an hour.
+A developer tool for exercising the [Dexcom API](https://developer.dexcom.com/docs). Authenticate via OAuth2 against the Sandbox or Production environment, pull Estimated Glucose Values, and inspect the raw responses. In Production it can also show the current reading from Dexcom Share, which the official API delays by an hour.
 
-The whole site sits behind a password. A **viewer** password opens the EGV Data tab and the live reading; a separate **admin** password also opens Connect, Health Correlations and API Info. One set of OAuth tokens is stored per environment, so the last admin to authenticate owns the active connection.
+The whole site sits behind a password. A **viewer** password opens the EGV Data tab and the live reading; a separate **admin** password also opens Connect and API Info. One set of OAuth tokens is stored per environment, so the last admin to authenticate owns the active connection.
 
 ---
 
@@ -16,7 +16,6 @@ The whole site sits behind a password. A **viewer** password opens the EGV Data 
 - **Live current glucose (Production, optional)** — the official API runs an hour behind. With Dexcom Share credentials configured, a card above the tabs shows the latest reading, its trend and its age, refreshed every minute, and queries that run up to the present are extended with Share readings, drawn dashed. Share is unofficial; see [DOCUMENTATION.md §3.4](DOCUMENTATION.md#34-dexcom-share-optional).
 - **Sign-in with two roles** — viewer and admin passwords, signed session cookies, and a limit on failed attempts, all enforced on the server for every page and API call.
 - **Exports** — CSV (with a `source` column marking live readings), raw JSON, and a PNG of the chart with a metadata header.
-- **Apple Health correlations** — upload an Apple Health export ZIP and overlay steps, heart rate, HRV, active energy, exercise time, distance or SpO2 against glucose, with Pearson coefficients per metric. Parsing happens entirely in your browser.
 
 ---
 
@@ -64,7 +63,7 @@ Without a `DATABASE_URL` the app still boots, but the EGV Data tab stays disable
 | `DEXCOM_CLIENT_ID` | Yes | From the Dexcom developer portal |
 | `DEXCOM_CLIENT_SECRET` | Yes | From the Dexcom developer portal |
 | `VIEWER_PASSWORD` | Yes in prod | Opens the site: EGV Data and the live card. Without it, production shows a "not configured" page and development skips sign-in. |
-| `ADMIN_PASSWORD` | Recommended | Also opens Connect, Health Correlations and API Info, which stay locked without it. Make it different from the viewer password. |
+| `ADMIN_PASSWORD` | Recommended | Also opens Connect and API Info, which stay locked without it. Make it different from the viewer password. |
 | `SESSION_SECRET` | Yes in prod | Random key that signs session cookies. `render.yaml` has Render generate it. Changing it signs everyone out. |
 | `DEXCOM_SHARE_USERNAME` | No | The CGM wearer's own Dexcom login (not a follower's). Turns on live data. |
 | `DEXCOM_SHARE_PASSWORD` | No | Password for that login. Dexcom locks accounts after repeated failed sign-ins, so keep it current. |
@@ -77,17 +76,16 @@ Without a `DATABASE_URL` the app still boots, but the EGV Data tab stays disable
 
 ```
 client/src/
-  pages/            Home (tabs), Correlations, NotFound
-  components/       EgvChart, LiveGlucoseCard, CorrelationChart, JsonViewer, ErrorBoundary, ui/ (shadcn)
-  lib/              timezone, export, glucose, mergeLiveReadings, splitDateRange, appleHealthParse, trpc
-  workers/          appleHealthWorker — message plumbing around lib/appleHealthParse
+  pages/            Home (tabs), NotFound
+  components/       EgvChart, LiveGlucoseCard, JsonViewer, ErrorBoundary, ui/ (shadcn)
+  lib/              timezone, export, glucose, mergeLiveReadings, trpc
 server/
   dexcom.ts         Dexcom service layer: tokens, refresh, API calls
   dexcomShare.ts    Dexcom Share client for live readings
   dexcomRoutes.ts   Express OAuth routes (admin only)
-  routers.ts        tRPC procedures (auth.*, dexcom.*, appleHealth.*)
+  routers.ts        tRPC procedures (auth.*, dexcom.*)
   _core/            server entry, sign-in and sessions (session.ts), tRPC setup, Vite middleware
-shared/const.ts     Dexcom base URLs, Apple Health metric definitions
+shared/const.ts     Dexcom base URLs and shared types
 drizzle/schema.ts   Database tables
 ```
 

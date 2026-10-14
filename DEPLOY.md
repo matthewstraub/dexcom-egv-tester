@@ -65,7 +65,7 @@ Set these in your Render service's **Environment** tab:
 | `DEXCOM_CLIENT_ID` | Yes | Your Dexcom developer app Client ID |
 | `DEXCOM_CLIENT_SECRET` | Yes | Your Dexcom developer app Client Secret |
 | `VIEWER_PASSWORD` | Yes | Opens the site: the EGV Data tab and the live card |
-| `ADMIN_PASSWORD` | Recommended | Also opens Connect, Health Correlations and API Info. Use a different password from the viewer one |
+| `ADMIN_PASSWORD` | Recommended | Also opens Connect and API Info. Use a different password from the viewer one |
 | `SESSION_SECRET` | Yes | A long random value that signs session cookies, e.g. `openssl rand -hex 32`. The Blueprint generates one; a manually created service needs it set by hand |
 | `DEXCOM_SHARE_USERNAME` | No | The CGM wearer's own Dexcom username, for live data. Only with the wearer's agreement |
 | `DEXCOM_SHARE_PASSWORD` | No | Password for that account |
@@ -100,7 +100,7 @@ The app will also display the correct redirect URI on the **Connect** tab — yo
 3. Switch between Sandbox and Production environments using the toggle.
 4. Click **Connect to Dexcom Sandbox** to test the OAuth flow.
 5. If the Share variables are set, switch back to Production: a **Current glucose** card should appear above the tabs within a few seconds.
-6. Sign out, sign in with the viewer password, and confirm Connect, Health Correlations and API Info show **Admin only**.
+6. Sign out, sign in with the viewer password, and confirm Connect and API Info show **Admin only**.
 
 ---
 
@@ -136,5 +136,5 @@ Browser → Render (Node.js/Express) → Dexcom API, Dexcom Share (optional)
 
 - **Frontend**: React 19 + Tailwind CSS 4 (served as static files by Express)
 - **Backend**: Express 4 + tRPC 11 (handles sign-in, the OAuth flow and API proxying)
-- **Database**: TiDB Cloud Serverless (Dexcom OAuth tokens and Apple Health import results)
+- **Database**: TiDB Cloud Serverless (Dexcom OAuth tokens)
 - **Access**: Password sign-in with viewer and admin roles; one set of Dexcom tokens stored per environment

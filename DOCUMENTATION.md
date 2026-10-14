@@ -1,15 +1,15 @@
 # Dexcom EGV Tester — Technical Documentation
 
-**Version**: 2.1  
-**Last Updated**: October 12, 2026
+**Version**: 2.2  
+**Last Updated**: October 14, 2026
 
 ---
 
 ## 1. Overview
 
-The Dexcom EGV Tester is a full-stack web application designed to authenticate with the Dexcom CGM (Continuous Glucose Monitor) API via OAuth2 and retrieve Estimated Glucose Values (EGVs). It provides a developer-focused interface for testing both the Dexcom Sandbox and Production API environments, visualizing glucose data on an interactive timeline chart, exporting results in multiple formats, and correlating glucose data with Apple Health metrics.
+The Dexcom EGV Tester is a full-stack web application designed to authenticate with the Dexcom CGM (Continuous Glucose Monitor) API via OAuth2 and retrieve Estimated Glucose Values (EGVs). It provides a developer-focused interface for testing both the Dexcom Sandbox and Production API environments, visualizing glucose data on an interactive timeline chart, and exporting results in multiple formats.
 
-The whole application sits behind a sign-in with two roles (§7.8): a **viewer** password opens the EGV Data tab and the live reading, and an **admin** password also opens Connect, Health Correlations and API Info. It remains single-tenant: one set of OAuth tokens is stored per environment (Sandbox and Production), so the last admin to authenticate "owns" the active connection.
+The whole application sits behind a sign-in with two roles (§7.8): a **viewer** password opens the EGV Data tab and the live reading, and an **admin** password also opens Connect and API Info. It remains single-tenant: one set of OAuth tokens is stored per environment (Sandbox and Production), so the last admin to authenticate "owns" the active connection.
 
 The official API delays data by an hour. In Production the app can also read the CGM wearer's **Dexcom Share** feed — the service behind the Dexcom Follow app — to show the current reading and extend the chart to the present (§3.4, §7.7).
 
@@ -50,8 +50,8 @@ The application follows a standard three-tier architecture with a React frontend
           ▼                     ▼              ▼
 ┌─────────────────┐ ┌───────────────────────┐ ┌──────────────────┐
 │ TiDB Cloud      │ │ Dexcom API            │ │ Dexcom Share     │
-│ Tokens, Apple   │ │ api.dexcom.com        │ │ share2.dexcom.com│
-│ Health imports  │ │ sandbox-api.dexcom.com│ │ (unofficial)     │
+│ Dexcom OAuth    │ │ api.dexcom.com        │ │ share2.dexcom.com│
+│ tokens          │ │ sandbox-api.dexcom.com│ │ (unofficial)     │
 └─────────────────┘ └───────────────────────┘ └──────────────────┘
 ```
 
@@ -164,6 +164,8 @@ The combination of `userId` + `environment` is unique in practice — each envir
 
 ### 4.3 Apple Health Tables
 
+**No longer used.** Health Correlations, the only feature that read or wrote these tables, was removed in October 2026 (§7.5). They still hold the last import, and they stay in `drizzle/schema.ts` on purpose: Render's build runs `pnpm db:push`, so removing them from the schema would generate a migration that drops them on the next deploy. Deleting that data is a separate, deliberate decision. The description below is kept for reference.
+
 Three tables hold the results of an Apple Health import. The parsing itself happens in the browser (see §7.5); the server only persists and reads back what the worker sends.
 
 **`health_upload_jobs`** — one row per import, carrying the summary. `fileRef` is always `client-parsed`, and `status` is one of `pending` / `processing` / `completed` / `failed` (client-side parsing writes `completed` directly). Also stores `totalRecordsScanned`, `relevantDataPoints`, `workoutCount`, `metricsFound` (comma-separated), `dataRangeStart` / `dataRangeEnd`, and `bucketCount`.
@@ -204,23 +206,17 @@ The table below maps each significant file to its responsibility in the applicat
 |-----------|---------------|
 | `server/dexcom.ts` | Core Dexcom service layer — OAuth URL generation, token exchange, token refresh, token storage/retrieval, EGV and data range API calls |
 | `server/dexcomRoutes.ts` | Express routes for the OAuth flow (`/api/dexcom/authorize`, `/api/dexcom/callback`) — admin only, with the `state` nonce check (§5) |
-| `server/routers.ts` | tRPC router definitions — `auth.me` / `auth.logout`, the `dexcom.*` procedures (`status`, `disconnect`, `dataRange`, `egvs`, `latest`) and `appleHealth.*`, each declared as viewer or admin |
+| `server/routers.ts` | tRPC router definitions — `auth.me` / `auth.logout`, and the `dexcom.*` procedures (`status`, `disconnect`, `dataRange`, `egvs`, `latest`), each declared as viewer or admin |
 | `server/dexcomShare.ts` | Dexcom Share client (§3.4) — sign-in sequence, 60-second cache, sign-in back-off, and the reading parser. `getLatestShareResult()` backs `dexcom.latest` |
 | `server/db.ts` | Lazy Drizzle connection helper (`getDb()`). Returns `null` when `DATABASE_URL` is unset, so local tooling runs without a database |
 | `server/_core/index.ts` | Express server entry point — registers the sign-in routes and gate first, then tRPC middleware, Dexcom routes, and Vite dev middleware |
 | `server/_core/session.ts` | Site sign-in (§7.8) — password-to-role check, signed session cookies, the `requireSession` gate, the failed-attempt limiter, and the self-contained sign-in page |
 | `server/_core/trpc.ts` | tRPC setup and the `viewerProcedure` / `adminProcedure` guards |
 | `server/_core/env.ts` | Reads `DEXCOM_CLIENT_ID`, `DEXCOM_CLIENT_SECRET` and the Dexcom Share credentials from the environment (the sign-in variables are read in `session.ts`) |
-| `drizzle/schema.ts` | Database table definitions (`users`, `dexcom_tokens`, and the Apple Health tables in §4.3) using Drizzle ORM |
-| `shared/const.ts` | Shared constants — Dexcom base URLs, environment types, timezone mode type, Apple Health metric definitions |
-| `server/appleHealth.ts` | `pearsonCorrelation()` and the `AggregatedBucket` type. The server-side XML parser that used to live here was removed when parsing moved to the browser |
-| `client/src/lib/appleHealthParse.ts` | The Apple Health pipeline: ZIP central-directory walk, `DecompressionStream` streaming, and 15-minute bucket aggregation. Plain functions with no worker globals, so it is unit-tested directly |
-| `client/src/workers/appleHealthWorker.ts` | Web Worker wrapper — reads the file and bridges `parseHealthExport` progress and results onto `postMessage`. Message plumbing only |
-| `client/src/lib/splitDateRange.ts` | Splits a date range into chunks of at most `maxDays` days for the correlation view's EGV fetches |
-| `client/src/pages/Correlations.tsx` | Health Correlations tab — file upload, metric toggles, date range, correlation results |
-| `client/src/components/CorrelationChart.tsx` | Recharts ComposedChart overlaying glucose with health metrics and workout reference areas |
+| `drizzle/schema.ts` | Database table definitions (`users`, `dexcom_tokens`, and the unused Apple Health tables in §4.3) using Drizzle ORM |
+| `shared/const.ts` | Shared constants — Dexcom base URLs, environment types, timezone mode type |
 | `client/src/main.tsx` | tRPC client — sends `dexcom.latest` outside the request batch (§7.7), and sends the browser to sign-in on a `401` |
-| `client/src/pages/Home.tsx` | Main UI — live card, tabbed interface (Connect, EGV Data, Health Correlations, API Info) with the admin-only tabs locked for viewers, environment and timezone toggles, date inputs, export buttons, sign-out |
+| `client/src/pages/Home.tsx` | Main UI — live card, tabbed interface (Connect, EGV Data, API Info) with the admin-only tabs locked for viewers, environment and timezone toggles, date inputs, export buttons, sign-out |
 | `client/src/components/LiveGlucoseCard.tsx` | Current-reading card above the tabs (§7.7) |
 | `client/src/components/EgvChart.tsx` | Recharts-based glucose timeline chart with target range highlighting and trend tooltips; live readings are a dashed second series |
 | `client/src/lib/mergeLiveReadings.ts` | Splices live readings onto official EGV records, with the consistency guard (§7.7) |
@@ -275,38 +271,11 @@ Three export formats are available once EGV data is loaded:
 
 The PNG export includes a header above the chart containing: the chart title with timezone label, the average glucose value (color-coded by range), formatted start and end dates, the date range duration (hours or days), the total record count (and how many are live), and the environment label (Production or Sandbox).
 
-### 7.5 Apple Health Correlations
+### 7.5 Apple Health Correlations (removed)
 
-The **Health Correlations** tab allows users to upload an Apple Health export (ZIP file containing `export.xml`) and overlay health metrics with EGV glucose data on a shared timeline.
+Removed in October 2026. Opening the tab made the server load the entire stored import in one response, and on Render's free instance that ran out of memory: replayed on ~284,000 synthetic rows, the `appleHealth.buckets` response alone needed ~430MB at its peak, most of it in superjson serialization. The feature wasn't being used, so it went rather than being rebuilt.
 
-**Upload Flow**: Users export their health data from the Apple Health app on iPhone (Profile > Export All Health Data), which produces a ZIP file. **Everything is parsed in the browser** — the file is never uploaded. `client/src/lib/appleHealthParse.ts` runs inside a Web Worker, parsing the ZIP central directory by hand to locate `export.xml`'s compressed bytes (Apple Health ZIPs use data descriptors, so the local header sizes are unusable), then streams those bytes through the browser's native `DecompressionStream("deflate-raw")` and scans the XML in chunks. Only the relevant metrics are extracted; other record types are skipped.
-
-This design exists because a 100 MB export expands to roughly 2 GB of XML — past V8's maximum string length, and far past what Render's 512 MB instance could hold. Parsing client-side removes the server from the equation entirely, regardless of file size. A real 102 MB export (2.1 GB of XML) parses in about 32 seconds with a ~169 MB peak, yielding ~3.6 M data points across 7 metrics.
-
-Only the aggregated result is sent to the server, in two stages: `appleHealth.saveResults` writes the summary and workouts (~0.5 MB), then `appleHealth.saveBucketBatch` is called repeatedly with 10,000 buckets at a time. A single payload was ~90 MB against a 50 MB body-parser limit, hence the batching.
-
-**Show Correlations Button**: After uploading health data and selecting a date range and metrics, users click the "Show Correlations" button to trigger EGV data fetching and chart rendering. The button provides contextual hints when prerequisites are missing (e.g., "Upload Apple Health data first" or "Connect to Dexcom first"). For date ranges exceeding 7 days, `splitDateRange()` splits the request into 7-day chunks which are fetched sequentially via `trpcUtils.dexcom.egvs.fetch()`. A progress indicator shows "Fetching chunk 2/5..." during multi-chunk loads. If an individual chunk fails it is logged and skipped, unless the failure is an authorization error, which aborts the whole run.
-
-**Supported Metrics**:
-
-| Metric | Apple Health Type | Unit | Chart Style |
-|--------|------------------|------|-------------|
-| Steps | `HKQuantityTypeIdentifierStepCount` | steps | Bar |
-| Heart Rate | `HKQuantityTypeIdentifierHeartRate` | bpm | Line |
-| Resting HR | `HKQuantityTypeIdentifierRestingHeartRate` | bpm | Dashed Line |
-| HRV (SDNN) | `HKQuantityTypeIdentifierHeartRateVariabilitySDNN` | ms | Line |
-| Active Energy | `HKQuantityTypeIdentifierActiveEnergyBurned` | kcal | Bar |
-| Exercise Time | `HKQuantityTypeIdentifierAppleExerciseTime` | min | Bar |
-| Distance | `HKQuantityTypeIdentifierDistanceWalkingRunning` | mi | Bar |
-| SpO2 | `HKQuantityTypeIdentifierOxygenSaturation` | % | Line |
-
-**Data Aggregation**: Parsed data points are aggregated into 15-minute time buckets. For each bucket, the system computes average, min, max, sum, and count for each metric. Cumulative metrics (steps, energy, exercise time, distance) use the sum value for display; rate metrics (heart rate, HRV) use the average.
-
-**Correlation Analysis**: The system computes Pearson correlation coefficients between glucose values and each health metric over matching 15-minute time buckets. Results are classified by strength (strong: |r| > 0.7, moderate: 0.4–0.7, weak: 0.2–0.4, negligible: < 0.2) and direction (positive or negative). A minimum of 5 overlapping buckets is required for a valid correlation.
-
-**Workout Overlay**: Workouts from the Apple Health export are displayed as shaded reference areas on the chart and listed in a separate card with activity type, duration, and calories burned.
-
-**Storage**: Results are persisted to the database (§4.3), so they survive restarts and redeploys. Importing again replaces the previous import, and "Clear Data" removes it via the `appleHealth.clear` mutation.
+The code is in git history, last present at commit `7fd94e1` (the page, chart, Web Worker, ZIP/XML parser, server procedures and their tests). Anyone restoring it should load buckets for the selected date range only, and keep large payloads out of superjson. The stored data is still in the tables described in §4.3.
 
 ### 7.6 Raw Response Viewer
 
@@ -345,10 +314,10 @@ The site's address isn't secret and its data is real, so the whole application s
 | Role | Password | Opens | Session lasts |
 |------|----------|-------|---------------|
 | **Viewer** | `VIEWER_PASSWORD` | EGV Data tab and the live card | 90 days |
-| **Admin** | `ADMIN_PASSWORD` | Everything, including Connect, Health Correlations and API Info | 30 days |
+| **Admin** | `ADMIN_PASSWORD` | Everything, including Connect and API Info | 30 days |
 
 - **One sign-in page, one password box** (`/login`). Whichever password matches decides the role, and both comparisons always run, in constant time. The page is self-contained HTML with no scripts, served with `noindex` and `no-store` headers.
-- **Admin tabs** show a viewer an "Admin only" card, with a password box that upgrades the session in place. The server enforces the same split independently of the UI: `dexcom.disconnect` and every `appleHealth.*` procedure are `adminProcedure`s (`server/_core/trpc.ts`), and both OAuth routes check for admin too, so a viewer can neither change nor take over the Dexcom connection.
+- **Admin tabs** show a viewer an "Admin only" card, with a password box that upgrades the session in place. The server enforces the same split independently of the UI: `dexcom.disconnect` is an `adminProcedure` (`server/_core/trpc.ts`), and both OAuth routes check for admin too, so a viewer can neither change nor take over the Dexcom connection.
 - **Sessions** are a signed cookie, `app_session_id`, holding the role and issue time with an HMAC-SHA256 under `SESSION_SECRET`. It is HttpOnly, `SameSite=Lax`, and Secure over HTTPS. The key is random rather than derived from a password, so a cookie reveals nothing about either password. Changing `SESSION_SECRET` signs everyone out; removing `ADMIN_PASSWORD` turns admin sessions into viewer sessions.
 - **Rate limits**: after 10 failed sign-ins from one address within 15 minutes, further attempts from it are refused until the window passes. Behind Render's proxy the address comes from `X-Forwarded-For`, and a client can add its own entries to that header, so there is also an overall cap: 30 failed sign-ins from anywhere within 15 minutes pause all new sign-ins for the rest of that window. That bounds guessing however the header is forged, and existing sessions are unaffected. Both counts are held in memory.
 - **Signed-out requests**: pages redirect to `/login?next=…`, where `next` must be a same-site path, so the redirect can't be used to send someone elsewhere. API calls get a `401`, and the client sends the browser to sign-in when it sees one.
@@ -411,7 +380,6 @@ You can register multiple redirect URIs in the Dexcom developer portal simultane
 | **Server bundler** | esbuild | 0.25 | Server-side code bundling for production |
 | **TypeScript** | TypeScript | 5.9 | Type safety across the full stack |
 | **Testing** | Vitest | 2.1 | Unit testing framework |
-| **Client-side parsing** | Web Worker + `DecompressionStream` | native | ZIP inflate and XML scan for Apple Health imports, off the main thread |
 | **Package manager** | pnpm | 10.4 | Fast, disk-efficient package management |
 
 ---
@@ -446,7 +414,7 @@ To support multiple users with independent Dexcom connections, you would need to
 3. Replace the `SINGLE_USER_ID = 1` constant in `server/routers.ts` and `server/dexcomRoutes.ts` with that user's ID.
 4. No schema change is needed — `dexcom_tokens.userId` already scopes tokens per user. The `users` table (§4.1) would become live again.
 
-Note that the Apple Health tables (§4.3) are **not** user-scoped and would need a `userId` column to support this, and that Dexcom Share (§3.4) is configured for a single wearer through environment variables.
+Note that Dexcom Share (§3.4) is configured for a single wearer through environment variables.
 
 ### 11.5 Monitoring and Logs
 
@@ -479,24 +447,19 @@ Run the full test suite with:
 pnpm test
 ```
 
-There are 150 tests across ten files:
+There are 100 tests across seven files:
 
 | File | Tests | Covers |
 |------|-------|--------|
 | `server/session.test.ts` | 31 | Auth-state resolution (fail-closed in production, open in development), passwords to roles, session tokens (signing, tampering, expiry), `next` validation, the per-address and overall sign-in limits, and the gate and sign-in handlers |
-| `client/src/lib/appleHealthParse.test.ts` | 28 | ZIP central-directory parsing, date and attribute helpers, bucket aggregation, chunk-boundary invariance, and the full decompress-and-parse pipeline against a generated ZIP |
 | `server/dexcomShare.test.ts` | 25 | The Share sign-in sequence and its exact request bodies, session expiry, the sign-in back-off, caching and request coalescing, timestamp and trend parsing, and `dexcom.latest` |
 | `client/src/lib/mergeLiveReadings.test.ts` | 18 | Windowing, de-duplication at the seam, ordering, the consistency guard, open-ended windows, and Sandbox exclusion |
-| `server/appleHealth.test.ts` | 12 | Pearson correlation, and the `appleHealth` tRPC procedures (admin only) with no data loaded |
 | `server/dexcom.routers.test.ts` | 12 | Role checks on the `dexcom` procedures, their behaviour and date-range validation, and `auth.me` |
 | `client/src/lib/export.test.ts` | 11 | CSV / JSON / PNG export helpers, including the `source` column |
-| `client/src/lib/splitDateRange.test.ts` | 10 | Date-range chunking |
 | `server/dexcom.credentials.test.ts` | 2 | Dexcom credentials are configured |
 | `server/auth.logout.test.ts` | 1 | Session cookie is cleared on logout |
 
-**Two of these fail without Dexcom credentials**: both `dexcom.credentials` tests assert the `DEXCOM_*` variables are non-empty. A clean local run is therefore **148 passed / 2 failed** — treat that as the baseline rather than a regression. Nothing else needs a database or network: the router and Apple Health tests mock `getDb()`, the Share client tests use a scripted transport, and the `dexcom.latest` tests blank the Share credentials, so no test contacts Dexcom.
-
-The Apple Health tests need no browser environment: Node provides `DecompressionStream`, `ReadableStream` and `File` natively, so `appleHealthParse.test.ts` builds a real ZIP with `CompressionStream` and exercises the actual decompression path under vitest's `environment: "node"`.
+**Two of these fail without Dexcom credentials**: both `dexcom.credentials` tests assert the `DEXCOM_*` variables are non-empty. A clean local run is therefore **98 passed / 2 failed** — treat that as the baseline rather than a regression. Nothing else needs a database or network: the router tests mock `getDb()`, the Share client tests use a scripted transport, and the `dexcom.latest` tests blank the Share credentials, so no test contacts Dexcom.
 
 ### 11.8 Local Development
 
@@ -515,7 +478,7 @@ pnpm dev
 
 The dev server prefers port 3000 but scans upward for the first free port (`findAvailablePort` in `server/_core/index.ts`), so check the `Server running on ...` line for the actual URL. Remember to add `http://localhost:<port>/api/dexcom/callback` as a redirect URI in your Dexcom developer app settings for local testing.
 
-Without a `DATABASE_URL` the app still boots and the Connect, Health Correlations and API Info tabs render, but `getDb()` returns `null`, so the connection status is always disconnected and the EGV Data tab stays disabled.
+Without a `DATABASE_URL` the app still boots and the Connect and API Info tabs render, but `getDb()` returns `null`, so the connection status is always disconnected and the EGV Data tab stays disabled.
 
 Without `VIEWER_PASSWORD` the dev server skips sign-in and treats every visitor as admin, logging a warning at startup. Set it, and optionally `ADMIN_PASSWORD`, to try the sign-in flow; `SESSION_SECRET` is optional in development, where sessions just don't survive a restart. Live data needs the Share variables. Set them only with the wearer's agreement, and never try a wrong password against a real account (§3.4).
 
