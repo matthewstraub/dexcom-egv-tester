@@ -194,6 +194,8 @@ The Dexcom OAuth2 flow follows the standard Authorization Code Grant pattern. Th
 
 **Token Refresh**: When a tRPC procedure needs an access token, it calls `getValidAccessToken()`. If the stored token expires within 60 seconds, the function automatically refreshes it using the refresh token and updates the database. This is transparent to the user.
 
+**Timeouts**: every request to Dexcom gives up after 20 seconds (`DEXCOM_TIMEOUT_MS` in `server/dexcom.ts`), so an outage fails fast instead of holding requests and their memory open.
+
 **Error Handling**: If the token exchange fails (e.g., "max user count exceeded"), the backend extracts a human-readable error from Dexcom's response (which can come in multiple formats) and redirects with `?dexcom_error=<message>&env=<env>`. The frontend displays this as a toast notification.
 
 ---
@@ -204,7 +206,7 @@ The table below maps each significant file to its responsibility in the applicat
 
 | File Path | Responsibility |
 |-----------|---------------|
-| `server/dexcom.ts` | Core Dexcom service layer — OAuth URL generation, token exchange, token refresh, token storage/retrieval, EGV and data range API calls |
+| `server/dexcom.ts` | Core Dexcom service layer — OAuth URL generation, token exchange, token refresh, token storage/retrieval, EGV and data range API calls. Every request has a 20-second timeout, and `describeDexcomError()` turns failures into secret-free log lines |
 | `server/dexcomRoutes.ts` | Express routes for the OAuth flow (`/api/dexcom/authorize`, `/api/dexcom/callback`) — admin only, with the `state` nonce check (§5) |
 | `server/routers.ts` | tRPC router definitions — `auth.me` / `auth.logout`, and the `dexcom.*` procedures (`status`, `disconnect`, `dataRange`, `egvs`, `latest`), each declared as viewer or admin |
 | `server/dexcomShare.ts` | Dexcom Share client (§3.4) — sign-in sequence, 60-second cache, sign-in back-off, and the reading parser. `getLatestShareResult()` backs `dexcom.latest` |
@@ -422,8 +424,8 @@ Render provides built-in logging. You can view server logs in the Render dashboa
 
 | Log Prefix | Meaning |
 |------------|---------|
-| `[Dexcom] Callback error:` | OAuth token exchange failed — check the error details |
-| `[Dexcom] Failed to refresh token` | Token refresh failed — user may need to re-authenticate |
+| `[Dexcom] Callback error:` | OAuth token exchange failed. The line gives Dexcom's HTTP status and error, or the network error code — never the request itself, which carries the client secret |
+| `[Dexcom] Failed to refresh token` | Token refresh failed, summarised the same way — the connection may need re-authorizing |
 | `[Database] Failed to connect:` | Database connection issue — verify `DATABASE_URL` |
 | `[Auth] Site locked: missing …` | Production is missing `VIEWER_PASSWORD` or `SESSION_SECRET`; the site shows "not configured" until they're set |
 | `[Auth] ADMIN_PASSWORD is not set` | The admin tabs are locked for everyone |
@@ -447,7 +449,7 @@ Run the full test suite with:
 pnpm test
 ```
 
-There are 100 tests across seven files:
+There are 107 tests across eight files:
 
 | File | Tests | Covers |
 |------|-------|--------|
@@ -455,11 +457,12 @@ There are 100 tests across seven files:
 | `server/dexcomShare.test.ts` | 25 | The Share sign-in sequence and its exact request bodies, session expiry, the sign-in back-off, caching and request coalescing, timestamp and trend parsing, and `dexcom.latest` |
 | `client/src/lib/mergeLiveReadings.test.ts` | 18 | Windowing, de-duplication at the seam, ordering, the consistency guard, open-ended windows, and Sandbox exclusion |
 | `server/dexcom.routers.test.ts` | 12 | Role checks on the `dexcom` procedures, their behaviour and date-range validation, and `auth.me` |
+| `server/dexcom.test.ts` | 7 | Every Dexcom request has a timeout, and failed token requests are logged as one line without the client secret or tokens |
 | `client/src/lib/export.test.ts` | 11 | CSV / JSON / PNG export helpers, including the `source` column |
 | `server/dexcom.credentials.test.ts` | 2 | Dexcom credentials are configured |
 | `server/auth.logout.test.ts` | 1 | Session cookie is cleared on logout |
 
-**Two of these fail without Dexcom credentials**: both `dexcom.credentials` tests assert the `DEXCOM_*` variables are non-empty. A clean local run is therefore **98 passed / 2 failed** — treat that as the baseline rather than a regression. Nothing else needs a database or network: the router tests mock `getDb()`, the Share client tests use a scripted transport, and the `dexcom.latest` tests blank the Share credentials, so no test contacts Dexcom.
+**Two of these fail without Dexcom credentials**: both `dexcom.credentials` tests assert the `DEXCOM_*` variables are non-empty. A clean local run is therefore **105 passed / 2 failed** — treat that as the baseline rather than a regression. Nothing else needs a database or network: the router tests mock `getDb()`, the Share client tests use a scripted transport, and the `dexcom.latest` tests blank the Share credentials, so no test contacts Dexcom.
 
 ### 11.8 Local Development
 

@@ -6,6 +6,31 @@ import { ENV } from "./_core/env";
 import { DEXCOM_BASE_URLS, type DexcomEnv } from "@shared/const";
 
 /**
+ * Every Dexcom request gives up after this long, so a Dexcom outage fails fast
+ * instead of holding requests (and their memory) open indefinitely.
+ */
+export const DEXCOM_TIMEOUT_MS = 20_000;
+
+/**
+ * A one-line description of a failed Dexcom request that is safe to log.
+ * Never log the axios error itself: its config holds the request body, and for
+ * the token endpoint that body carries the client secret and the refresh token
+ * or authorization code.
+ */
+export function describeDexcomError(err: unknown): string {
+  const e = err as { response?: { status?: number; data?: any }; code?: unknown; message?: unknown } | null;
+  const status = e?.response?.status;
+  if (status) {
+    const data = e?.response?.data;
+    const detail = typeof data === "string" ? data : data?.error_description ?? data?.error ?? data?.message;
+    return detail ? `HTTP ${status}: ${String(detail).slice(0, 200)}` : `HTTP ${status}`;
+  }
+  const message = typeof e?.message === "string" ? e.message.slice(0, 200) : "";
+  if (typeof e?.code === "string") return message ? `${e.code}: ${message}` : e.code;
+  return message || "unknown error";
+}
+
+/**
  * Get the Dexcom API base URL for a given environment.
  */
 export function getDexcomBaseUrl(env: DexcomEnv): string {
@@ -43,6 +68,7 @@ export async function exchangeCodeForTokens(code: string, redirectUri: string, e
     }).toString(),
     {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      timeout: DEXCOM_TIMEOUT_MS,
     }
   );
   return response.data as {
@@ -68,6 +94,7 @@ export async function refreshAccessToken(refreshToken: string, env: DexcomEnv) {
     }).toString(),
     {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      timeout: DEXCOM_TIMEOUT_MS,
     }
   );
   return response.data as {
@@ -157,7 +184,7 @@ export async function getValidAccessToken(userId: number, env: DexcomEnv): Promi
 
     return refreshed.access_token;
   } catch (err) {
-    console.error(`[Dexcom] Failed to refresh token (${env}):`, err);
+    console.error(`[Dexcom] Failed to refresh token (${env}): ${describeDexcomError(err)}`);
     return null;
   }
 }
@@ -214,6 +241,7 @@ export async function fetchEgvData(
     {
       params: { startDate, endDate },
       headers: { Authorization: `Bearer ${accessToken}` },
+      timeout: DEXCOM_TIMEOUT_MS,
     }
   );
   return response.data;
@@ -228,6 +256,7 @@ export async function fetchDataRange(accessToken: string, env: DexcomEnv) {
     `${base}/v3/users/self/dataRange`,
     {
       headers: { Authorization: `Bearer ${accessToken}` },
+      timeout: DEXCOM_TIMEOUT_MS,
     }
   );
   return response.data;
