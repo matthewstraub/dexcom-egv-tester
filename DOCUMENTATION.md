@@ -1,6 +1,6 @@
 # Dexcom EGV Tester — Technical Documentation
 
-**Version**: 2.3  
+**Version**: 2.4  
 **Last Updated**: October 14, 2026
 
 ---
@@ -241,7 +241,7 @@ The table below maps each significant file to its responsibility in the applicat
 | `client/src/components/ChartRangeControl.tsx` | Admin-only popover for setting the chart's vertical range (§7.3) |
 | `client/src/lib/chartAxis.ts` | The chart's vertical range and ticks, and the timings that draw the official and live series as one stroke |
 | `client/src/lib/queryWindow.ts` | The default query window: the last 24 hours, ending at the current minute |
-| `client/src/lib/export.ts` | Export utilities — CSV (with a `source` column), JSON, and PNG (SVG-to-Canvas) chart export |
+| `client/src/lib/export.ts` | Export utilities — CSV (with a `source` column), JSON, and PNG (SVG-to-Canvas) chart export. `chartHeaderText()` builds the PNG header's text, reading the query window as UTC |
 | `render.yaml` | Render deployment configuration (Infrastructure as Code) |
 | `DEPLOY.md` | Step-by-step deployment guide for Render + TiDB Cloud |
 
@@ -268,6 +268,7 @@ The glucose chart uses Recharts to render an interactive timeline with the follo
 | Red dashed line (54) | Urgent low threshold |
 | Teal line | Glucose readings over time |
 | Dashed teal line | Live readings from Dexcom Share, continuing from the last official reading (§7.7) |
+| Reading colours | Tooltip values and the live card share one set of bands (`getGlucoseColor` in `client/src/lib/glucose.ts`): red below 80 mg/dL, low and urgent low alike; green 80–180; amber 181–250; red above 250 |
 | Hover tooltip | Shows exact value, time, trend arrow, and rate of change. Live readings are labelled "Live · Dexcom Share" and have no rate of change |
 | **Average glucose badge** | Displayed next to the chart title, color-coded: green (80–180), red (<80), amber (>180). Includes live readings |
 
@@ -469,7 +470,7 @@ Run the full test suite with:
 pnpm test
 ```
 
-There are 135 tests across eleven files:
+There are 145 tests across thirteen files:
 
 | File | Tests | Covers |
 |------|-------|--------|
@@ -479,13 +480,15 @@ There are 135 tests across eleven files:
 | `client/src/lib/mergeLiveReadings.test.ts` | 18 | Windowing, de-duplication at the seam, ordering, the consistency guard, open-ended windows, and Sandbox exclusion |
 | `server/dexcom.routers.test.ts` | 12 | Role checks on the `dexcom` procedures, their behaviour and date-range validation, and `auth.me` |
 | `server/dexcom.test.ts` | 7 | Every Dexcom request has a timeout, and failed token requests are logged as one line without the client secret or tokens |
+| `client/src/lib/glucose.test.ts` | 6 | The colour bands (every low red) and `parseUtc` |
+| `client/src/lib/chartHeader.test.ts` | 4 | The PNG header's text, run under a non-UTC timezone so the start and end can't silently shift by the UTC offset |
 | `client/src/lib/chartAxis.test.ts` | 9 | Vertical range widening, tick steps, and the draw timings that start the live tail where the official line ends |
 | `client/src/lib/queryWindow.test.ts` | 2 | The default 24-hour window and its rounding to the minute |
 | `client/src/lib/export.test.ts` | 11 | CSV / JSON / PNG export helpers, including the `source` column |
 | `server/dexcom.credentials.test.ts` | 2 | Dexcom credentials are configured |
 | `server/auth.logout.test.ts` | 1 | Session cookie is cleared on logout |
 
-**Two of these fail without Dexcom credentials**: both `dexcom.credentials` tests assert the `DEXCOM_*` variables are non-empty. A clean local run is therefore **133 passed / 2 failed** — treat that as the baseline rather than a regression. Nothing else needs a database or network: the router tests mock `getDb()`, the Share client tests use a scripted transport, and the `dexcom.latest` tests blank the Share credentials, so no test contacts Dexcom.
+**Two of these fail without Dexcom credentials**: both `dexcom.credentials` tests assert the `DEXCOM_*` variables are non-empty. A clean local run is therefore **143 passed / 2 failed** — treat that as the baseline rather than a regression. Nothing else needs a database or network: the router tests mock `getDb()`, the Share client tests use a scripted transport, and the `dexcom.latest` tests blank the Share credentials, so no test contacts Dexcom.
 
 ### 11.8 Local Development
 
