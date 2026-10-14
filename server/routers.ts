@@ -12,6 +12,7 @@ import {
   disconnectDexcom,
 } from "./dexcom";
 import { getLatestShareResult } from "./dexcomShare";
+import { chartRangeSchema, getChartRange, saveChartRange } from "./settings";
 
 const dexcomEnvSchema = z.enum(["sandbox", "production"]);
 
@@ -137,6 +138,14 @@ export const appRouter = router({
           throw new Error(msg || "Failed to fetch EGV data from Dexcom");
         }
       }),
+  }),
+
+  settings: router({
+    /** Site-wide display settings, for everyone signed in. */
+    get: viewerProcedure.query(async () => ({ chartRange: await getChartRange() })),
+
+    /** Set the EGV chart's vertical range for everyone. Admin only. */
+    setChartRange: adminProcedure.input(chartRangeSchema).mutation(({ input }) => saveChartRange(input)),
   }),
 });
 

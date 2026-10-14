@@ -1,6 +1,6 @@
 # Dexcom EGV Tester — Technical Documentation
 
-**Version**: 2.2  
+**Version**: 2.3  
 **Last Updated**: October 14, 2026
 
 ---
@@ -126,7 +126,7 @@ Three rules protect the wearer's account:
 
 ## 4. Database Schema
 
-The database contains five tables managed by Drizzle ORM. Migrations are applied via `pnpm db:push` (which runs `drizzle-kit generate && drizzle-kit migrate`).
+The database contains six tables managed by Drizzle ORM. Migrations are applied via `pnpm db:push` (which runs `drizzle-kit generate && drizzle-kit migrate`).
 
 ### 4.1 `users` Table
 
@@ -176,6 +176,18 @@ Three tables hold the results of an Apple Health import. The parsing itself happ
 
 Saving a new import clears all three tables first, so only the most recent import is ever queryable.
 
+### 4.4 `app_settings` Table
+
+Site-wide settings that admins change in the app, one row per setting. Added in October 2026; its migration (`drizzle/0004_amused_betty_brant.sql`) is applied by `pnpm db:push` during the Render build.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `name` | VARCHAR(64), PK | Setting key. Today only `chartRange` |
+| `value` | TEXT | The value as JSON, e.g. `{"min":40,"max":350}` |
+| `updatedAt` | TIMESTAMP | Last change (auto-updated) |
+
+Values are validated where they're read (`server/settings.ts`), so a new setting needs no migration. A missing, unreadable or invalid value falls back to its default rather than failing.
+
 ---
 
 ## 5. OAuth2 Authentication Flow
@@ -208,23 +220,27 @@ The table below maps each significant file to its responsibility in the applicat
 |-----------|---------------|
 | `server/dexcom.ts` | Core Dexcom service layer — OAuth URL generation, token exchange, token refresh, token storage/retrieval, EGV and data range API calls. Every request has a 20-second timeout, and `describeDexcomError()` turns failures into secret-free log lines |
 | `server/dexcomRoutes.ts` | Express routes for the OAuth flow (`/api/dexcom/authorize`, `/api/dexcom/callback`) — admin only, with the `state` nonce check (§5) |
-| `server/routers.ts` | tRPC router definitions — `auth.me` / `auth.logout`, and the `dexcom.*` procedures (`status`, `disconnect`, `dataRange`, `egvs`, `latest`), each declared as viewer or admin |
+| `server/routers.ts` | tRPC router definitions — `auth.me` / `auth.logout`, and the `dexcom.*` procedures (`status`, `disconnect`, `dataRange`, `egvs`, `latest`), each declared as viewer or admin; plus `settings.get` (viewer) and `settings.setChartRange` (admin) |
+| `server/settings.ts` | Site-wide settings in `app_settings` (§4.4): `getChartRange()` / `saveChartRange()` and the `chartRangeSchema` validation |
 | `server/dexcomShare.ts` | Dexcom Share client (§3.4) — sign-in sequence, 60-second cache, sign-in back-off, and the reading parser. `getLatestShareResult()` backs `dexcom.latest` |
 | `server/db.ts` | Lazy Drizzle connection helper (`getDb()`). Returns `null` when `DATABASE_URL` is unset, so local tooling runs without a database |
 | `server/_core/index.ts` | Express server entry point — registers the sign-in routes and gate first, then tRPC middleware, Dexcom routes, and Vite dev middleware |
 | `server/_core/session.ts` | Site sign-in (§7.8) — password-to-role check, signed session cookies, the `requireSession` gate, the failed-attempt limiter, and the self-contained sign-in page |
 | `server/_core/trpc.ts` | tRPC setup and the `viewerProcedure` / `adminProcedure` guards |
 | `server/_core/env.ts` | Reads `DEXCOM_CLIENT_ID`, `DEXCOM_CLIENT_SECRET` and the Dexcom Share credentials from the environment (the sign-in variables are read in `session.ts`) |
-| `drizzle/schema.ts` | Database table definitions (`users`, `dexcom_tokens`, and the unused Apple Health tables in §4.3) using Drizzle ORM |
-| `shared/const.ts` | Shared constants — Dexcom base URLs, environment types, timezone mode type |
+| `drizzle/schema.ts` | Database table definitions (`users`, `dexcom_tokens`, `app_settings`, and the unused Apple Health tables in §4.3) using Drizzle ORM |
+| `shared/const.ts` | Shared constants — Dexcom base URLs, environment types, timezone mode type, and the default chart range and its limits |
 | `client/src/main.tsx` | tRPC client — sends `dexcom.latest` outside the request batch (§7.7), and sends the browser to sign-in on a `401` |
 | `client/src/pages/Home.tsx` | Main UI — live card, tabbed interface (Connect, EGV Data, API Info) with the admin-only tabs locked for viewers, environment and timezone toggles, date inputs, export buttons, sign-out |
 | `client/src/components/LiveGlucoseCard.tsx` | Current-reading card above the tabs (§7.7) |
-| `client/src/components/EgvChart.tsx` | Recharts-based glucose timeline chart with target range highlighting and trend tooltips; live readings are a dashed second series |
+| `client/src/components/EgvChart.tsx` | Recharts-based glucose timeline chart with target range highlighting and trend tooltips; live readings are a dashed second series; takes the vertical range as a prop (§7.3) |
 | `client/src/lib/mergeLiveReadings.ts` | Splices live readings onto official EGV records, with the consistency guard (§7.7) |
 | `client/src/lib/glucose.ts` | Glucose colour bands, trend arrows and `parseUtc()`, shared by the chart and the live card |
 | `client/src/components/JsonViewer.tsx` | Syntax-highlighted JSON viewer for raw API responses, with a size cap (§7.6) |
 | `client/src/lib/timezone.ts` | Timezone conversion utilities — UTC/local formatting, input-to-API date conversion |
+| `client/src/components/ChartRangeControl.tsx` | Admin-only popover for setting the chart's vertical range (§7.3) |
+| `client/src/lib/chartAxis.ts` | The chart's vertical range and ticks, and the timings that draw the official and live series as one stroke |
+| `client/src/lib/queryWindow.ts` | The default query window: the last 24 hours, ending at the current minute |
 | `client/src/lib/export.ts` | Export utilities — CSV (with a `source` column), JSON, and PNG (SVG-to-Canvas) chart export |
 | `render.yaml` | Render deployment configuration (Infrastructure as Code) |
 | `DEPLOY.md` | Step-by-step deployment guide for Render + TiDB Cloud |
@@ -254,6 +270,10 @@ The glucose chart uses Recharts to render an interactive timeline with the follo
 | Dashed teal line | Live readings from Dexcom Share, continuing from the last official reading (§7.7) |
 | Hover tooltip | Shows exact value, time, trend arrow, and rate of change. Live readings are labelled "Live · Dexcom Share" and have no rate of change |
 | **Average glucose badge** | Displayed next to the chart title, color-coded: green (80–180), red (<80), amber (>180). Includes live readings |
+
+**Vertical range**: 40–350 mg/dL unless an admin has set another, using the range button (with a sliders icon) beside the chart title. The setting is stored on the server (§4.4), so it applies to everyone, and is limited to 0–500 mg/dL with at least 50 between the ends. The axis still widens to fit any reading outside the range, so a reading is never clipped. Ticks fall on round numbers: every 25, 50 or 100 mg/dL, depending on the span.
+
+**Draw-in**: the chart animates in left to right as one stroke. The solid official line takes its share of the 1.5 seconds, and the dashed live tail starts where it ends (`drawTimings` in `client/src/lib/chartAxis.ts`). Left to Recharts' defaults, each series would animate along its own path at once, so the short live tail at the right edge appeared before the rest.
 
 The chart X-axis uses **smart axis labels** that adapt to the date range being displayed. When the data spans a single day or less, only times are shown (e.g., "02:30 PM"). When the data spans multiple days, the axis switches to a date+time format (e.g., "01/15 14:30") with slightly angled labels to prevent overlap.
 
@@ -302,12 +322,12 @@ In Production, with the Share variables set (§3.4), two things change.
 
 - It adds only readings more than 2.5 minutes after the last official one, so nothing is duplicated or replaced. The two sources stamp the same reading a few seconds apart, which is why the seam is a window rather than an instant.
 - It stays inside the query window. A window that ended within 15 minutes of when it was fetched counts as "up to now", and keeps growing as new readings arrive for as long as the page is open.
-- **Consistency guard.** Share signs in with its own credentials, separate from the OAuth connection, so a misconfiguration could stitch two people's data together. Before merging, each Share reading in the overlap is paired with the official reading within ±2.5 minutes of it; given at least 3 pairs, their median difference must be no more than 3 mg/dL. Otherwise nothing is merged, and the chart shows a warning. The default 3-hour window has about two hours of overlap, so the guard normally has plenty to compare.
+- **Consistency guard.** Share signs in with its own credentials, separate from the OAuth connection, so a misconfiguration could stitch two people's data together. Before merging, each Share reading in the overlap is paired with the official reading within ±2.5 minutes of it; given at least 3 pairs, their median difference must be no more than 3 mg/dL. Otherwise nothing is merged, and the chart shows a warning. The default 24-hour window has about 23 hours of overlap, so the guard normally has plenty to compare.
 - Never in Sandbox, whose data is synthetic: live data is real and must not be mixed into it.
 
 Live points are drawn as a dashed line continuing from the last official point, and their tooltip says "Live · Dexcom Share". The record badge ("36 records · 12 live"), the average, the CSV export and the PNG header include them; the JSON export and the raw-response viewer remain the untouched official response.
 
-**Default range.** The date inputs default to the three hours ending at the newest live reading — or at the official data's end, without Share — and the "Available range" line notes how far live data reaches. The default is applied once per environment and only into empty inputs, so it never overwrites dates already entered.
+**Default range.** In Production the date inputs default to the last 24 hours, ending at the current minute (`lastHoursWindow` in `client/src/lib/queryWindow.ts`). Until someone edits a date, Fetch re-measures that window from the moment it's clicked, so a page left open still fetches the true last 24 hours. Edited dates are left alone, and switching environment resets the default. Sandbox data isn't live, so there the default is the last 24 hours of its data, applied once its data range arrives. The "Available range" line notes how far live data reaches.
 
 ### 7.8 Sign-in and Roles
 
@@ -319,7 +339,7 @@ The site's address isn't secret and its data is real, so the whole application s
 | **Admin** | `ADMIN_PASSWORD` | Everything, including Connect and API Info | 30 days |
 
 - **One sign-in page, one password box** (`/login`). Whichever password matches decides the role, and both comparisons always run, in constant time. The page is self-contained HTML with no scripts, served with `noindex` and `no-store` headers.
-- **Admin tabs** show a viewer an "Admin only" card, with a password box that upgrades the session in place. The server enforces the same split independently of the UI: `dexcom.disconnect` is an `adminProcedure` (`server/_core/trpc.ts`), and both OAuth routes check for admin too, so a viewer can neither change nor take over the Dexcom connection.
+- **Admin tabs** show a viewer an "Admin only" card, with a password box that upgrades the session in place. The server enforces the same split independently of the UI: `dexcom.disconnect` and `settings.setChartRange` are `adminProcedure`s (`server/_core/trpc.ts`), and both OAuth routes check for admin too, so a viewer can neither change nor take over the Dexcom connection.
 - **Sessions** are a signed cookie, `app_session_id`, holding the role and issue time with an HMAC-SHA256 under `SESSION_SECRET`. It is HttpOnly, `SameSite=Lax`, and Secure over HTTPS. The key is random rather than derived from a password, so a cookie reveals nothing about either password. Changing `SESSION_SECRET` signs everyone out; removing `ADMIN_PASSWORD` turns admin sessions into viewer sessions.
 - **Rate limits**: after 10 failed sign-ins from one address within 15 minutes, further attempts from it are refused until the window passes. Behind Render's proxy the address comes from `X-Forwarded-For`, and a client can add its own entries to that header, so there is also an overall cap: 30 failed sign-ins from anywhere within 15 minutes pause all new sign-ins for the rest of that window. That bounds guessing however the header is forged, and existing sessions are unaffected. Both counts are held in memory.
 - **Signed-out requests**: pages redirect to `/login?next=…`, where `next` must be a same-site path, so the redirect can't be used to send someone elsewhere. API calls get a `401`, and the client sends the browser to sign-in when it sees one.
@@ -449,20 +469,23 @@ Run the full test suite with:
 pnpm test
 ```
 
-There are 107 tests across eight files:
+There are 135 tests across eleven files:
 
 | File | Tests | Covers |
 |------|-------|--------|
+| `server/settings.test.ts` | 17 | Chart-range validation, reading with fallbacks (nothing saved, unreadable or invalid value, unreadable table, no database), saving, and the viewer/admin split on the procedures |
 | `server/session.test.ts` | 31 | Auth-state resolution (fail-closed in production, open in development), passwords to roles, session tokens (signing, tampering, expiry), `next` validation, the per-address and overall sign-in limits, and the gate and sign-in handlers |
 | `server/dexcomShare.test.ts` | 25 | The Share sign-in sequence and its exact request bodies, session expiry, the sign-in back-off, caching and request coalescing, timestamp and trend parsing, and `dexcom.latest` |
 | `client/src/lib/mergeLiveReadings.test.ts` | 18 | Windowing, de-duplication at the seam, ordering, the consistency guard, open-ended windows, and Sandbox exclusion |
 | `server/dexcom.routers.test.ts` | 12 | Role checks on the `dexcom` procedures, their behaviour and date-range validation, and `auth.me` |
 | `server/dexcom.test.ts` | 7 | Every Dexcom request has a timeout, and failed token requests are logged as one line without the client secret or tokens |
+| `client/src/lib/chartAxis.test.ts` | 9 | Vertical range widening, tick steps, and the draw timings that start the live tail where the official line ends |
+| `client/src/lib/queryWindow.test.ts` | 2 | The default 24-hour window and its rounding to the minute |
 | `client/src/lib/export.test.ts` | 11 | CSV / JSON / PNG export helpers, including the `source` column |
 | `server/dexcom.credentials.test.ts` | 2 | Dexcom credentials are configured |
 | `server/auth.logout.test.ts` | 1 | Session cookie is cleared on logout |
 
-**Two of these fail without Dexcom credentials**: both `dexcom.credentials` tests assert the `DEXCOM_*` variables are non-empty. A clean local run is therefore **105 passed / 2 failed** — treat that as the baseline rather than a regression. Nothing else needs a database or network: the router tests mock `getDb()`, the Share client tests use a scripted transport, and the `dexcom.latest` tests blank the Share credentials, so no test contacts Dexcom.
+**Two of these fail without Dexcom credentials**: both `dexcom.credentials` tests assert the `DEXCOM_*` variables are non-empty. A clean local run is therefore **133 passed / 2 failed** — treat that as the baseline rather than a regression. Nothing else needs a database or network: the router tests mock `getDb()`, the Share client tests use a scripted transport, and the `dexcom.latest` tests blank the Share credentials, so no test contacts Dexcom.
 
 ### 11.8 Local Development
 
