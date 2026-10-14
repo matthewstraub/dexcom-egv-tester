@@ -1,4 +1,5 @@
 import type { TimezoneMode } from "../../../shared/const";
+import { parseUtc } from "./glucose";
 import { formatDateTime, getLocalTimezoneAbbr } from "./timezone";
 
 interface EgvRecord {
@@ -126,6 +127,26 @@ export interface ChartExportMeta {
 }
 
 /**
+ * The text lines of the PNG header. The window arrives as UTC without a "Z"
+ * ("2026-10-13T00:41:00"), straight from the date inputs. It must be parsed as
+ * UTC: JavaScript reads that form as local time, which shifted the printed
+ * start and end by the UTC offset (4 hours in EDT).
+ */
+export function chartHeaderText(meta: ChartExportMeta) {
+  const start = new Date(parseUtc(meta.startDate));
+  const end = new Date(parseUtc(meta.endDate));
+  const diffDays = (end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24);
+  const rangeLabel = diffDays < 1 ? `${(diffDays * 24).toFixed(1)} hours` : `${diffDays.toFixed(1)} days`;
+  const tzLabel = meta.timezone === "utc" ? "UTC" : getLocalTimezoneAbbr();
+  return {
+    title: `Glucose Timeline (${tzLabel})`,
+    avg: meta.avgGlucose !== null ? `Avg: ${Math.round(meta.avgGlucose)} mg/dL` : null,
+    window: `${formatDateTime(start, meta.timezone)}  \u2192  ${formatDateTime(end, meta.timezone)}`,
+    stats: `Range: ${rangeLabel}  \u00B7  ${meta.recordCount.toLocaleString()} records${meta.liveCount ? ` (${meta.liveCount} live)` : ""}  \u00B7  ${meta.env === "production" ? "Production" : "Sandbox"}`,
+  };
+}
+
+/**
  * Export the chart as a PNG image using the SVG inside the chart container.
  * Adds a header with date range, start/end dates, and average glucose.
  */
@@ -205,24 +226,16 @@ export async function exportChartPng(
 
         // Draw header if metadata provided
         if (meta) {
-          const tzLabel = meta.timezone === "utc" ? "UTC" : getLocalTimezoneAbbr();
-          const startFormatted = formatDateTime(meta.startDate, meta.timezone);
-          const endFormatted = formatDateTime(meta.endDate, meta.timezone);
-          const diffMs = new Date(meta.endDate + (meta.endDate.endsWith("Z") ? "" : "Z")).getTime() -
-                         new Date(meta.startDate + (meta.startDate.endsWith("Z") ? "" : "Z")).getTime();
-          const diffDays = diffMs / (1000 * 60 * 60 * 24);
-          const rangeLabel = diffDays < 1
-            ? `${(diffDays * 24).toFixed(1)} hours`
-            : `${diffDays.toFixed(1)} days`;
+          const text = chartHeaderText(meta);
 
           // Title line
           ctx.fillStyle = "#c0caf5";
           ctx.font = "bold 16px 'Fira Code', 'Courier New', monospace";
-          ctx.fillText(`Glucose Timeline (${tzLabel})`, padding, 28);
+          ctx.fillText(text.title, padding, 28);
 
           // Average glucose (right-aligned)
-          if (meta.avgGlucose !== null) {
-            const avgText = `Avg: ${Math.round(meta.avgGlucose)} mg/dL`;
+          if (meta.avgGlucose !== null && text.avg) {
+            const avgText = text.avg;
             const avgColor = meta.avgGlucose < 80 ? "#f7768e" : meta.avgGlucose <= 180 ? "#9ece6a" : "#e0af68";
             ctx.font = "bold 15px 'Fira Code', 'Courier New', monospace";
             const avgWidth = ctx.measureText(avgText).width;
@@ -233,11 +246,10 @@ export async function exportChartPng(
           // Date range line
           ctx.fillStyle = "#565f89";
           ctx.font = "12px 'Fira Code', 'Courier New', monospace";
-          ctx.fillText(`${startFormatted}  \u2192  ${endFormatted}`, padding, 50);
+          ctx.fillText(text.window, padding, 50);
 
           // Stats line
-          const statsText = `Range: ${rangeLabel}  \u00B7  ${meta.recordCount.toLocaleString()} records${meta.liveCount ? ` (${meta.liveCount} live)` : ""}  \u00B7  ${meta.env === "production" ? "Production" : "Sandbox"}`;
-          ctx.fillText(statsText, padding, 68);
+          ctx.fillText(text.stats, padding, 68);
 
           // Separator line
           ctx.strokeStyle = "#2a2b3d";

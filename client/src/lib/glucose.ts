@@ -13,10 +13,13 @@ export const TREND_ARROWS: Record<string, string> = {
   rateOutOfRange: "!",
 };
 
+/**
+ * Colour bands for a reading: red below 80 mg/dL (low and urgent low alike, as
+ * on the average badge), green 80–180, amber 181–250, red above 250.
+ */
 export function getGlucoseColor(value: number | null): string {
   if (value === null) return "oklch(0.58 0.02 264)";
-  if (value < 54) return "oklch(0.65 0.25 25)"; // urgent low - red
-  if (value < 80) return "oklch(0.75 0.15 60)"; // low - amber
+  if (value < 80) return "oklch(0.65 0.25 25)"; // low or urgent low - red
   if (value <= 180) return "oklch(0.72 0.15 145)"; // in range - green
   if (value <= 250) return "oklch(0.75 0.15 60)"; // high - amber
   return "oklch(0.65 0.25 25)"; // very high - red
