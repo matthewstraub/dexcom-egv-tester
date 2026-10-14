@@ -38,6 +38,15 @@ export const dexcomTokens = mysqlTable("dexcom_tokens", {
 export type DexcomToken = typeof dexcomTokens.$inferSelect;
 export type InsertDexcomToken = typeof dexcomTokens.$inferInsert;
 
+/*
+ * The three Apple Health tables below are no longer read or written: the
+ * Health Correlations feature was removed in October 2026. They stay defined
+ * here on purpose. Render's build runs `pnpm db:push` (drizzle-kit generate +
+ * migrate), so deleting them from this file would generate DROP TABLE
+ * migrations and delete the stored import on the next deploy. Dropping them
+ * is a deliberate, separate decision about that data.
+ */
+
 /**
  * Tracks Apple Health upload processing jobs.
  * Supports async background processing with status polling.

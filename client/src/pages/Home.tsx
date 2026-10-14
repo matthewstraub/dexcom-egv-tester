@@ -10,7 +10,6 @@ import { EgvChart } from "@/components/EgvChart";
 import { LiveGlucoseCard } from "@/components/LiveGlucoseCard";
 import { parseUtc } from "@/lib/glucose";
 import { mergeLiveReadings } from "@/lib/mergeLiveReadings";
-import Correlations from "@/pages/Correlations";
 import { JsonViewer } from "@/components/JsonViewer";
 import {
   formatDate, formatDateTime, getLocalTimezoneAbbr, getLocalTimezoneName,
@@ -18,7 +17,7 @@ import {
 } from "@/lib/timezone";
 import {
   Activity, CheckCircle2, Circle, Clock, Download, ExternalLink, FileJson, FileSpreadsheet,
-  Image, Loader2, Plug, PlugZap, Terminal, Unplug, XCircle, Globe, FlaskConical, HeartPulse,
+  Image, Loader2, Plug, PlugZap, Terminal, Unplug, XCircle, Globe, FlaskConical,
   Lock, LogOut, ShieldCheck,
 } from "lucide-react";
 import { exportCsv, exportJson, exportChartPng, type ChartExportMeta } from "@/lib/export";
@@ -37,9 +36,9 @@ const TREND_MAP: Record<string, { arrow: string; range: string }> = {
   doubleDown: { arrow: "\u2B07\u2B07", range: "(-8 to -3)" },
 };
 
-// On phones the tab list is a 2x2 grid, so triggers get their own height and are
-// allowed to wrap \u2014 "Health Correlations" does not fit one line in a half-width
-// cell. From sm up we hand height and nowrap back to the Tabs primitive.
+// On phones the tab list is a three-column grid, so triggers get their own height
+// and may wrap, and their leading icons are hidden to leave room for the lock on
+// admin tabs. From sm up we hand height and nowrap back to the Tabs primitive.
 const TAB_TRIGGER_CLS =
   "font-mono text-xs data-[state=active]:bg-card h-auto min-h-8 w-full whitespace-normal py-1.5 leading-tight sm:h-[calc(100%-1px)] sm:w-auto sm:whitespace-nowrap sm:py-1";
 
@@ -78,7 +77,7 @@ function EgvChartSkeleton({ days }: { days: number | null }) {
   );
 }
 
-const TABS = ["connect", "data", "correlations", "info"] as const;
+const TABS = ["connect", "data", "info"] as const;
 
 /**
  * Shown in place of a settings tab until the admin password is entered.
@@ -497,11 +496,10 @@ export default function Home() {
           <LiveGlucoseCard className="mb-6" data={latest.data} isLoading={latest.isLoading} timezone={timezone} />
         )}
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="grid w-full grid-cols-2 h-auto gap-1 sm:inline-flex sm:w-fit sm:h-9 sm:gap-0 bg-secondary/50 border border-border mb-6">
-            <TabsTrigger value="connect" className={TAB_TRIGGER_CLS}><Plug className="h-3.5 w-3.5 mr-1.5 shrink-0" />Connect{!isAdmin && <Lock className="h-3 w-3 ml-1.5 shrink-0 opacity-60" aria-label="Admin only" />}</TabsTrigger>
-            <TabsTrigger value="data" className={TAB_TRIGGER_CLS} disabled={!dexcomStatus.data?.connected}><Activity className="h-3.5 w-3.5 mr-1.5 shrink-0" />EGV Data</TabsTrigger>
-            <TabsTrigger value="correlations" className={TAB_TRIGGER_CLS}><HeartPulse className="h-3.5 w-3.5 mr-1.5 shrink-0" />Health Correlations{!isAdmin && <Lock className="h-3 w-3 ml-1.5 shrink-0 opacity-60" aria-label="Admin only" />}</TabsTrigger>
-            <TabsTrigger value="info" className={TAB_TRIGGER_CLS}><ExternalLink className="h-3.5 w-3.5 mr-1.5 shrink-0" />API Info{!isAdmin && <Lock className="h-3 w-3 ml-1.5 shrink-0 opacity-60" aria-label="Admin only" />}</TabsTrigger>
+          <TabsList className="grid w-full grid-cols-3 h-auto gap-1 sm:inline-flex sm:w-fit sm:h-9 sm:gap-0 bg-secondary/50 border border-border mb-6">
+            <TabsTrigger value="connect" className={TAB_TRIGGER_CLS}><Plug className="h-3.5 w-3.5 mr-1.5 shrink-0 max-sm:hidden" />Connect{!isAdmin && <Lock className="h-3 w-3 ml-1.5 shrink-0 opacity-60" aria-label="Admin only" />}</TabsTrigger>
+            <TabsTrigger value="data" className={TAB_TRIGGER_CLS} disabled={!dexcomStatus.data?.connected}><Activity className="h-3.5 w-3.5 mr-1.5 shrink-0 max-sm:hidden" />EGV Data</TabsTrigger>
+            <TabsTrigger value="info" className={TAB_TRIGGER_CLS}><ExternalLink className="h-3.5 w-3.5 mr-1.5 shrink-0 max-sm:hidden" />API Info{!isAdmin && <Lock className="h-3 w-3 ml-1.5 shrink-0 opacity-60" aria-label="Admin only" />}</TabsTrigger>
           </TabsList>
 
           <TabsContent value="connect" className="space-y-6">
@@ -729,12 +727,6 @@ export default function Home() {
 
             {egvQuery.data && <JsonViewer data={egvQuery.data} title={`Response \u2014 GET /v3/users/self/egvs (${dexcomEnv})`} maxHeight="500px" />}
             {dataRange.data && <JsonViewer data={dataRange.data} title={`Response \u2014 GET /v3/users/self/dataRange (${dexcomEnv})`} maxHeight="300px" />}
-          </TabsContent>
-
-          <TabsContent value="correlations" className="space-y-6">
-            {isAdmin ? (<>
-            <Correlations dexcomEnv={dexcomEnv} timezone={timezone} />
-            </>) : <AdminOnlyCard tab="correlations" adminEnabled={me.data?.adminEnabled ?? false} />}
           </TabsContent>
 
           <TabsContent value="info" className="space-y-6">

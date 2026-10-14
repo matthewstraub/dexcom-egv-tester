@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import type { Express, Request, Response } from "express";
-import { exchangeCodeForTokens, getDexcomAuthUrl, saveDexcomTokens } from "./dexcom";
+import { describeDexcomError, exchangeCodeForTokens, getDexcomAuthUrl, saveDexcomTokens } from "./dexcom";
 import type { DexcomEnv } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { readCookie, safeEqual } from "./_core/session";
@@ -168,7 +168,7 @@ export function registerDexcomRoutes(app: Express) {
 
       res.redirect(`/?dexcom_connected=true&env=${env}`);
     } catch (err: any) {
-      console.error("[Dexcom] Callback error:", err?.response?.data || err);
+      console.error(`[Dexcom] Callback error: ${describeDexcomError(err)}`);
       fail(extractDexcomError(err));
     }
   });
