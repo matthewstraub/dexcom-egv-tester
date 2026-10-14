@@ -9,8 +9,8 @@ The whole site sits behind a password. A **viewer** password opens the EGV Data 
 ## What it does
 
 - **OAuth2 against either environment** — Sandbox (`sandbox-api.dexcom.com`, test users, no password) or Production (`api.dexcom.com`, real credentials and real patient data). The UI defaults to Production and warns you about it.
-- **EGV queries** with a date-range picker, validated against Dexcom's 30-day-per-request cap.
-- **Glucose timeline chart** with target-range shading, low/high/urgent-low thresholds, trend arrows and rate-of-change on hover, and an average-glucose badge.
+- **EGV queries** with a date-range picker that defaults to the last 24 hours, validated against Dexcom's 30-day-per-request cap.
+- **Glucose timeline chart** with a vertical range admins can set for everyone, target-range shading, low/high/urgent-low thresholds, trend arrows and rate-of-change on hover, and an average-glucose badge.
 - **UTC / local timezone toggle** applied consistently across inputs, axis labels, tooltips and exports. Dates are always converted to UTC before hitting the API.
 - **Raw response viewer** with syntax highlighting, so you can see exactly what Dexcom returned.
 - **Live current glucose (Production, optional)** — the official API runs an hour behind. With Dexcom Share credentials configured, a card above the tabs shows the latest reading, its trend and its age, refreshed every minute, and queries that run up to the present are extended with Share readings, drawn dashed. Share is unofficial; see [DOCUMENTATION.md §3.4](DOCUMENTATION.md#34-dexcom-share-optional).
@@ -77,13 +77,14 @@ Without a `DATABASE_URL` the app still boots, but the EGV Data tab stays disable
 ```
 client/src/
   pages/            Home (tabs), NotFound
-  components/       EgvChart, LiveGlucoseCard, JsonViewer, ErrorBoundary, ui/ (shadcn)
-  lib/              timezone, export, glucose, mergeLiveReadings, trpc
+  components/       EgvChart, LiveGlucoseCard, ChartRangeControl, JsonViewer, ErrorBoundary, ui/ (shadcn)
+  lib/              timezone, export, glucose, mergeLiveReadings, chartAxis, queryWindow, trpc
 server/
   dexcom.ts         Dexcom service layer: tokens, refresh, API calls
   dexcomShare.ts    Dexcom Share client for live readings
+  settings.ts       Site-wide settings (the chart range), stored in app_settings
   dexcomRoutes.ts   Express OAuth routes (admin only)
-  routers.ts        tRPC procedures (auth.*, dexcom.*)
+  routers.ts        tRPC procedures (auth.*, dexcom.*, settings.*)
   _core/            server entry, sign-in and sessions (session.ts), tRPC setup, Vite middleware
 shared/const.ts     Dexcom base URLs and shared types
 drizzle/schema.ts   Database tables

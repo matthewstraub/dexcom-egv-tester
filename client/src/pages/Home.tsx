@@ -8,8 +8,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { trpc } from "@/lib/trpc";
 import { EgvChart } from "@/components/EgvChart";
 import { LiveGlucoseCard } from "@/components/LiveGlucoseCard";
+import { ChartRangeControl } from "@/components/ChartRangeControl";
 import { parseUtc } from "@/lib/glucose";
 import { mergeLiveReadings } from "@/lib/mergeLiveReadings";
+import { DEFAULT_WINDOW_HOURS, lastHoursWindow } from "@/lib/queryWindow";
 import { JsonViewer } from "@/components/JsonViewer";
 import {
   formatDate, formatDateTime, getLocalTimezoneAbbr, getLocalTimezoneName,
@@ -24,7 +26,7 @@ import { exportCsv, exportJson, exportChartPng, type ChartExportMeta } from "@/l
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { DexcomEnv, TimezoneMode } from "../../../shared/const";
-import { DEXCOM_BASE_URLS } from "../../../shared/const";
+import { CHART_RANGE_DEFAULT, DEXCOM_BASE_URLS } from "../../../shared/const";
 
 const TREND_MAP: Record<string, { arrow: string; range: string }> = {
   doubleUp: { arrow: "\u2B06\u2B06", range: "(+3 to +8)" },
@@ -208,14 +210,24 @@ function TimezoneToggle({ timezone, onChange }: { timezone: TimezoneMode; onChan
   );
 }
 
+/** The last 24 hours, as values for the date inputs. */
+function defaultWindowInputs(tz: TimezoneMode) {
+  const { start, end } = lastHoursWindow();
+  return { start: apiDateToInput(start.toISOString(), tz), end: apiDateToInput(end.toISOString(), tz) };
+}
+
 export default function Home() {
   const chartRef = useRef<HTMLDivElement>(null);
   const [activeTab, setActiveTab] = useState("data");
   // A tab named in the URL (e.g. after unlocking) wins over the automatic choice.
   const requestedTab = useRef<string | null>(null);
   const defaultsAppliedFor = useRef<DexcomEnv | null>(null);
-  const [startDate, setStartDate] = useState("");
-  const [endDate, setEndDate] = useState("");
+  // Production opens on the last 24 hours. Until someone edits the dates,
+  // fetching re-measures that window from the current time.
+  const [initialWindow] = useState(() => defaultWindowInputs("local"));
+  const [startDate, setStartDate] = useState(initialWindow.start);
+  const [endDate, setEndDate] = useState(initialWindow.end);
+  const datesEdited = useRef(false);
   const [queryEnabled, setQueryEnabled] = useState(false);
   const [dexcomEnv, setDexcomEnv] = useState<DexcomEnv>("production");
   const [timezone, setTimezone] = useState<TimezoneMode>("local");
@@ -274,6 +286,10 @@ export default function Home() {
     return last && officialEnd && parseUtc(last) > parseUtc(officialEnd) ? last : null;
   })();
 
+  // Site-wide display settings; the chart falls back to the default range.
+  const settings = trpc.settings.get.useQuery(undefined, { refetchOnWindowFocus: false, staleTime: 5 * 60_000 });
+  const chartRange = settings.data?.chartRange ?? CHART_RANGE_DEFAULT;
+
   const disconnectMutation = trpc.dexcom.disconnect.useMutation({
     onSuccess: () => { toast.success(`Disconnected from Dexcom (${dexcomEnv})`); dexcomStatus.refetch(); },
   });
@@ -282,8 +298,11 @@ export default function Home() {
   const handleEnvChange = (newEnv: DexcomEnv) => {
     setDexcomEnv(newEnv);
     setQueryEnabled(false);
-    setStartDate("");
-    setEndDate("");
+    // Sandbox data isn't live, so its default waits for its data range (below).
+    const window = newEnv === "production" ? defaultWindowInputs(timezone) : { start: "", end: "" };
+    setStartDate(window.start);
+    setEndDate(window.end);
+    datesEdited.current = false;
     defaultsAppliedFor.current = null;
   };
 
@@ -304,7 +323,7 @@ export default function Home() {
     const params = new URLSearchParams(window.location.search);
     if (params.get("dexcom_connected") === "true") {
       const connectedEnv = (params.get("env") as DexcomEnv) || "sandbox";
-      setDexcomEnv(connectedEnv);
+      handleEnvChange(connectedEnv);
       toast.success(`Successfully connected to Dexcom (${connectedEnv})!`);
       dexcomStatus.refetch();
       setActiveTab("data");
@@ -312,7 +331,7 @@ export default function Home() {
     }
     if (params.get("dexcom_error")) {
       const errorEnv = (params.get("env") as DexcomEnv) || "sandbox";
-      setDexcomEnv(errorEnv);
+      handleEnvChange(errorEnv);
       requestedTab.current = "connect";
       setActiveTab("connect");
       const errorMsg = params.get("dexcom_error") || "Unknown error";
@@ -321,22 +340,19 @@ export default function Home() {
     }
   }, []);
 
-  // Default to the most recent three hours. With live data, "most recent" ends
-  // at the latest Share reading rather than the official data's end, which
-  // trails by about an hour. Applied once per environment, and only into empty
-  // inputs, so it never overwrites dates already chosen.
+  // Sandbox data isn't live, so its default is the last 24 hours of its data.
+  // Applied once per visit to Sandbox, and only into empty inputs.
   useEffect(() => {
-    const egvRange = dataRange.data?.egvs;
-    if (!egvRange?.start?.systemTime || !egvRange?.end?.systemTime) return;
-    const liveSettled = dexcomEnv !== "production" || latest.data !== undefined || latest.isError;
-    if (!liveSettled || defaultsAppliedFor.current === dexcomEnv) return;
+    if (dexcomEnv !== "sandbox") return;
+    const end = dataRange.data?.egvs?.end?.systemTime;
+    if (!end || defaultsAppliedFor.current === dexcomEnv) return;
     defaultsAppliedFor.current = dexcomEnv;
     if (startDate || endDate) return;
-    const endTime = new Date(liveEnd ?? egvRange.end.systemTime);
-    const startTime = new Date(endTime.getTime() - 3 * 60 * 60 * 1000);
+    const endTime = new Date(end);
+    const startTime = new Date(endTime.getTime() - DEFAULT_WINDOW_HOURS * 3_600_000);
     setStartDate(apiDateToInput(startTime.toISOString(), timezone));
     setEndDate(apiDateToInput(endTime.toISOString(), timezone));
-  }, [dataRange.data, latest.data, latest.isError, dexcomEnv]);
+  }, [dataRange.data, dexcomEnv]);
 
   useEffect(() => {
     const tab = new URLSearchParams(window.location.search).get("tab");
@@ -367,9 +383,18 @@ export default function Home() {
   };
 
   const handleFetchEgvs = () => {
-    if (!startDate || !endDate) { toast.error("Please enter both start and end dates"); return; }
-    const utcStart = inputToApiDate(startDate, timezone);
-    const utcEnd = inputToApiDate(endDate, timezone);
+    let startInput = startDate;
+    let endInput = endDate;
+    // Untouched Production dates mean "the last 24 hours", measured now rather
+    // than when the page was opened.
+    if (dexcomEnv === "production" && !datesEdited.current) {
+      ({ start: startInput, end: endInput } = defaultWindowInputs(timezone));
+      setStartDate(startInput);
+      setEndDate(endInput);
+    }
+    if (!startInput || !endInput) { toast.error("Please enter both start and end dates"); return; }
+    const utcStart = inputToApiDate(startInput, timezone);
+    const utcEnd = inputToApiDate(endInput, timezone);
     const start = new Date(utcStart);
     const end = new Date(utcEnd);
     if (isNaN(start.getTime()) || isNaN(end.getTime())) { toast.error("Invalid date format"); return; }
@@ -645,11 +670,11 @@ export default function Home() {
                 <div className="flex flex-col sm:flex-row gap-3">
                   <div className="flex-1">
                     <label className="text-xs font-mono text-muted-foreground block mb-1.5">startDate ({tzLabel})</label>
-                    <Input type="datetime-local" value={startDate} onChange={(e) => { setStartDate(e.target.value); setQueryEnabled(false); }} className="font-mono text-xs bg-input border-border" />
+                    <Input type="datetime-local" value={startDate} onChange={(e) => { setStartDate(e.target.value); setQueryEnabled(false); datesEdited.current = true; }} className="font-mono text-xs bg-input border-border" />
                   </div>
                   <div className="flex-1">
                     <label className="text-xs font-mono text-muted-foreground block mb-1.5">endDate ({tzLabel})</label>
-                    <Input type="datetime-local" value={endDate} onChange={(e) => { setEndDate(e.target.value); setQueryEnabled(false); }} className="font-mono text-xs bg-input border-border" />
+                    <Input type="datetime-local" value={endDate} onChange={(e) => { setEndDate(e.target.value); setQueryEnabled(false); datesEdited.current = true; }} className="font-mono text-xs bg-input border-border" />
                   </div>
                   <div className="flex items-end">
                     <Button onClick={handleFetchEgvs} disabled={egvQuery.isFetching} className="w-full sm:w-auto">
@@ -695,16 +720,19 @@ export default function Home() {
                 <CardHeader>
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <CardTitle className="text-base">Glucose Timeline <span className="text-xs font-mono text-muted-foreground ml-2">({tzLabel})</span></CardTitle>
+                    <div className="flex flex-wrap items-center gap-2">
+                    {isAdmin && <ChartRangeControl range={chartRange} />}
                     {avgGlucose !== null && (
                       <div className="flex shrink-0 items-center gap-2 px-3 py-1.5 rounded-md bg-secondary/50 border border-border">
                         <span className="text-xs font-mono text-muted-foreground">Avg:</span>
                         <span className={"text-sm font-mono font-semibold whitespace-nowrap " + (avgGlucose < 80 ? "text-red-400" : avgGlucose <= 180 ? "text-green-400" : "text-amber-400")}>{Math.round(avgGlucose)} mg/dL</span>
                       </div>
                     )}
+                    </div>
                   </div>
                 </CardHeader>
                 <CardContent>
-                  <EgvChart ref={chartRef} records={egvRecords!} timezone={timezone} />
+                  <EgvChart ref={chartRef} records={egvRecords!} timezone={timezone} yRange={chartRange} />
                   <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 mt-4 text-xs font-mono text-muted-foreground">
                     <div className="flex items-center gap-1.5"><div className="w-3 h-0.5 shrink-0 bg-[oklch(0.75_0.15_60)]" /><span>80 / 180 mg/dL thresholds</span></div>
                     <div className="flex items-center gap-1.5"><div className="w-3 h-3 shrink-0 bg-[oklch(0.72_0.15_145)] opacity-10 rounded-sm" /><span>Target range</span></div>

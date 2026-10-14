@@ -10,9 +10,10 @@ import {
   ReferenceLine,
   ReferenceArea,
 } from "recharts";
-import type { TimezoneMode } from "../../../shared/const";
+import { CHART_RANGE_DEFAULT, type TimezoneMode } from "../../../shared/const";
 import { formatTime, formatDateTime, formatDateTimeShort } from "@/lib/timezone";
 import { getGlucoseColor, TREND_ARROWS } from "@/lib/glucose";
+import { drawTimings, yAxisDomain, yAxisTicks, type ChartRange } from "@/lib/chartAxis";
 
 interface EgvRecord {
   recordId: string;
@@ -32,9 +33,11 @@ interface EgvRecord {
 interface EgvChartProps {
   records: EgvRecord[];
   timezone: TimezoneMode;
+  /** Vertical range in mg/dL; widened automatically to fit any reading outside it. */
+  yRange?: ChartRange;
 }
 
-export const EgvChart = forwardRef<HTMLDivElement, EgvChartProps>(function EgvChart({ records, timezone }, ref) {
+export const EgvChart = forwardRef<HTMLDivElement, EgvChartProps>(function EgvChart({ records, timezone, yRange = CHART_RANGE_DEFAULT }, ref) {
   // Official and live readings are drawn as separate series: `value` (solid)
   // and `liveValue` (dashed). The last official point carries both, so the
   // dashed line picks up exactly where the solid one ends.
@@ -71,6 +74,14 @@ export const EgvChart = forwardRef<HTMLDivElement, EgvChartProps>(function EgvCh
     const diffMs = lastTime - firstTime;
     return diffMs > 24 * 60 * 60 * 1000; // more than 24 hours
   }, [chartData]);
+
+  const yAxis = useMemo(() => {
+    const values = chartData.map(p => p.glucose).filter((v): v is number => typeof v === "number");
+    const [lo, hi] = yAxisDomain(yRange, values);
+    return { domain: [lo, hi] as [number, number], ticks: yAxisTicks(lo, hi) };
+  }, [chartData, yRange.min, yRange.max]);
+
+  const draw = useMemo(() => drawTimings(chartData), [chartData]);
 
   if (chartData.length === 0) {
     return (
@@ -129,7 +140,8 @@ export const EgvChart = forwardRef<HTMLDivElement, EgvChartProps>(function EgvCh
             height={isMultiDay ? 50 : 30}
           />
           <YAxis
-            domain={[40, 400]}
+            domain={yAxis.domain}
+            ticks={yAxis.ticks}
             stroke="oklch(0.45 0.02 264)"
             tick={{ fontSize: 11, fontFamily: "Fira Code" }}
             tickFormatter={(val) => `${val}`}
@@ -172,6 +184,9 @@ export const EgvChart = forwardRef<HTMLDivElement, EgvChartProps>(function EgvCh
             stroke="oklch(0.72 0.15 180)"
             strokeWidth={2}
             dot={false}
+            animationBegin={draw.official.begin}
+            animationDuration={draw.official.duration}
+            animationEasing={draw.official.easing}
             activeDot={{
               r: 4,
               fill: "oklch(0.72 0.15 180)",
@@ -187,6 +202,9 @@ export const EgvChart = forwardRef<HTMLDivElement, EgvChartProps>(function EgvCh
             strokeWidth={2}
             strokeDasharray="5 4"
             dot={false}
+            animationBegin={draw.live.begin}
+            animationDuration={draw.live.duration}
+            animationEasing={draw.live.easing}
             activeDot={{
               r: 4,
               fill: "oklch(0.72 0.15 180)",

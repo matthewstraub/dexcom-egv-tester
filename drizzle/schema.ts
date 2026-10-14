@@ -128,3 +128,16 @@ export const healthWorkouts = mysqlTable("health_workouts", {
   endDate: varchar("endDate", { length: 30 }).notNull(),
   sourceName: varchar("sourceName", { length: 256 }),
 });
+
+/**
+ * Site-wide settings, one row per setting, changed by admins in the app.
+ * Values are JSON and validated where they're read (server/settings.ts), so
+ * adding a setting doesn't need a migration.
+ */
+export const appSettings = mysqlTable("app_settings", {
+  name: varchar("name", { length: 64 }).primaryKey(),
+  value: text("value").notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type AppSetting = typeof appSettings.$inferSelect;
