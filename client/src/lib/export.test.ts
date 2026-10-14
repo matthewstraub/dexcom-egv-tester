@@ -96,8 +96,15 @@ describe("export utilities", () => {
       const lines = csv.split("\n");
 
       expect(lines[0]).toBe(
-        "systemTime,displayTime,displayTime_formatted,value,unit,trend,trendRate,rateUnit,status,displayDevice,displayApp,transmitterGeneration,transmitterId,recordId"
+        "systemTime,displayTime,displayTime_formatted,value,unit,trend,trendRate,rateUnit,status,displayDevice,displayApp,transmitterGeneration,transmitterId,recordId,source"
       );
+    });
+
+    it("labels each row with its source, official by default", () => {
+      const live = { ...sampleRecords[0], recordId: "share-1", source: "share" as const };
+      exportCsv([...sampleRecords, live], "utc", "production", "2024-01-15T00:00:00", "2024-01-15T23:59:59");
+      const rows = capturedBlobContent[0].split("\n").slice(1);
+      expect(rows.map((r: string) => r.split(",").at(-1))).toEqual(["official", "official", "share"]);
     });
 
     it("generates correct number of data rows", () => {

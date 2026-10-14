@@ -6,6 +6,7 @@ import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerDexcomRoutes } from "../dexcomRoutes";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
+import { registerSessionRoutes, requireSession } from "./session";
 import { serveStatic, setupVite } from "./vite";
 
 function isPortAvailable(port: number): Promise<boolean> {
@@ -34,6 +35,10 @@ async function startServer() {
   // Configure body parser with larger size limit for other routes
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
+  // Sign-in page, then the gate. Everything registered below it — API, OAuth
+  // routes and the client itself — requires a session.
+  registerSessionRoutes(app);
+  app.use(requireSession);
   // Dexcom OAuth routes
   registerDexcomRoutes(app);
   // tRPC API

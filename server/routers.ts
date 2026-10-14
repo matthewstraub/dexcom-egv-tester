@@ -3,7 +3,8 @@ import { eq, desc } from "drizzle-orm";
 import { z } from "zod";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
-import { publicProcedure, router } from "./_core/trpc";
+import { adminProcedure, publicProcedure, router, viewerProcedure } from "./_core/trpc";
+import { resolveAuthState } from "./_core/session";
 import {
   getDexcomConnectionStatus,
   getValidAccessToken,
@@ -11,6 +12,7 @@ import {
   fetchDataRange,
   disconnectDexcom,
 } from "./dexcom";
+import { getLatestShareResult } from "./dexcomShare";
 import { pearsonCorrelation } from "./appleHealth";
 import { getDb } from "./db";
 import {
@@ -24,8 +26,9 @@ import type { AppleHealthMetricKey } from "@shared/const";
 const dexcomEnvSchema = z.enum(["sandbox", "production"]);
 
 /**
- * Single-user mode: all Dexcom tokens are stored under this fixed user ID.
- * No authentication is required — the app is publicly accessible.
+ * All Dexcom tokens are stored under this fixed user ID: there is one Dexcom
+ * connection, shared by everyone who signs in. Access is controlled by the
+ * site sign-in (see _core/session.ts), not per user.
  */
 const SINGLE_USER_ID = 1;
 
@@ -34,7 +37,15 @@ const BUCKET_BATCH_SIZE = 500;
 export const appRouter = router({
   system: systemRouter,
   auth: router({
-    me: publicProcedure.query(() => null),
+    /** Who the client is signed in as, so the UI can lock the admin tabs. */
+    me: publicProcedure.query(({ ctx }) => {
+      const state = resolveAuthState();
+      return {
+        role: ctx.role,
+        adminEnabled: state.mode === "open" || (state.mode === "enforced" && state.adminEnabled),
+        signInRequired: state.mode !== "open",
+      };
+    }),
     logout: publicProcedure.mutation(({ ctx }) => {
       const cookieOptions = getSessionCookieOptions(ctx.req);
       ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
@@ -44,7 +55,7 @@ export const appRouter = router({
 
   dexcom: router({
     /** Get the current Dexcom connection status for a given environment */
-    status: publicProcedure
+    status: viewerProcedure
       .input(z.object({ env: dexcomEnvSchema }).optional())
       .query(async ({ input }) => {
         const env: DexcomEnv = input?.env ?? "sandbox";
@@ -52,7 +63,7 @@ export const appRouter = router({
       }),
 
     /** Disconnect from Dexcom (remove stored tokens) for a given environment */
-    disconnect: publicProcedure
+    disconnect: adminProcedure
       .input(z.object({ env: dexcomEnvSchema }).optional())
       .mutation(async ({ input }) => {
         const env: DexcomEnv = input?.env ?? "sandbox";
@@ -61,7 +72,7 @@ export const appRouter = router({
       }),
 
     /** Fetch the available data range for the connected Dexcom user */
-    dataRange: publicProcedure
+    dataRange: viewerProcedure
       .input(z.object({ env: dexcomEnvSchema }).optional())
       .query(async ({ input }) => {
         const env: DexcomEnv = input?.env ?? "sandbox";
@@ -79,8 +90,15 @@ export const appRouter = router({
         }
       }),
 
+    /**
+     * The last 24 hours from Dexcom Share — live, unlike the official API,
+     * which runs an hour behind in the US. Never throws; problems come back
+     * in `error`, with the last good readings when there are any.
+     */
+    latest: viewerProcedure.query(() => getLatestShareResult()),
+
     /** Fetch EGV data for a given date range */
-    egvs: publicProcedure
+    egvs: viewerProcedure
       .input(
         z.object({
           startDate: z.string(),
@@ -138,7 +156,7 @@ export const appRouter = router({
      * Step 1: Save summary + workouts (small payload ~0.5MB).
      * Returns a jobId that the frontend uses for subsequent bucket batch saves.
      */
-    saveResults: publicProcedure
+    saveResults: adminProcedure
       .input(
         z.object({
           summary: z.object({
@@ -225,7 +243,7 @@ export const appRouter = router({
      * Step 2: Save a batch of buckets (called multiple times by the frontend).
      * Each call sends ~10K buckets (~3MB) to stay well under body parser limits.
      */
-    saveBucketBatch: publicProcedure
+    saveBucketBatch: adminProcedure
       .input(
         z.object({
           jobId: z.number(),
@@ -297,7 +315,7 @@ export const appRouter = router({
     /**
      * Get the status of the latest completed upload.
      */
-    status: publicProcedure.query(async () => {
+    status: adminProcedure.query(async () => {
       const db = await getDb();
       if (!db) return { uploaded: false as const };
 
@@ -332,7 +350,7 @@ export const appRouter = router({
     /**
      * Get aggregated health data buckets from the latest completed job.
      */
-    buckets: publicProcedure.query(async () => {
+    buckets: adminProcedure.query(async () => {
       const db = await getDb();
       if (!db) return [];
 
@@ -378,7 +396,7 @@ export const appRouter = router({
     /**
      * Get workout records from the latest completed job.
      */
-    workouts: publicProcedure.query(async () => {
+    workouts: adminProcedure.query(async () => {
       const db = await getDb();
       if (!db) return [];
 
@@ -411,7 +429,7 @@ export const appRouter = router({
     }),
 
     /** Calculate correlations between EGV data and health metrics */
-    correlations: publicProcedure
+    correlations: adminProcedure
       .input(
         z.object({
           egvData: z.array(
@@ -537,7 +555,7 @@ export const appRouter = router({
       }),
 
     /** Clear all Apple Health data */
-    clear: publicProcedure.mutation(async () => {
+    clear: adminProcedure.mutation(async () => {
       const db = await getDb();
       if (!db) return { success: true };
 

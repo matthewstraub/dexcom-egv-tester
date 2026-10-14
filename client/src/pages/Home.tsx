@@ -7,6 +7,9 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { trpc } from "@/lib/trpc";
 import { EgvChart } from "@/components/EgvChart";
+import { LiveGlucoseCard } from "@/components/LiveGlucoseCard";
+import { parseUtc } from "@/lib/glucose";
+import { mergeLiveReadings } from "@/lib/mergeLiveReadings";
 import Correlations from "@/pages/Correlations";
 import { JsonViewer } from "@/components/JsonViewer";
 import {
@@ -16,6 +19,7 @@ import {
 import {
   Activity, CheckCircle2, Circle, Clock, Download, ExternalLink, FileJson, FileSpreadsheet,
   Image, Loader2, Plug, PlugZap, Terminal, Unplug, XCircle, Globe, FlaskConical, HeartPulse,
+  Lock, LogOut, ShieldCheck,
 } from "lucide-react";
 import { exportCsv, exportJson, exportChartPng, type ChartExportMeta } from "@/lib/export";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -69,6 +73,43 @@ function EgvChartSkeleton({ days }: { days: number | null }) {
             <span className="text-[10px]">(large ranges can take a few seconds)</span>
           )}
         </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+const TABS = ["connect", "data", "correlations", "info"] as const;
+
+/**
+ * Shown in place of a settings tab until the admin password is entered.
+ * Posts straight to the server's sign-in route, which upgrades the session
+ * and sends the browser back to this same tab.
+ */
+function AdminOnlyCard({ tab, adminEnabled }: { tab: string; adminEnabled: boolean }) {
+  return (
+    <Card className="bg-card border-border max-w-md">
+      <CardHeader>
+        <CardTitle className="text-base flex items-center gap-2"><Lock className="h-4 w-4 text-primary" />Admin only</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {adminEnabled ? (
+          <>
+            <p className="text-xs text-muted-foreground">
+              This tab manages the Dexcom connection and other settings. Enter the admin password to open it.
+            </p>
+            <form method="post" action="/login" className="space-y-3">
+              <input type="hidden" name="next" value={`/?tab=${tab}`} />
+              <input type="hidden" name="want" value="admin" />
+              <input type="text" name="username" value="dexcom-egv-tester" autoComplete="username" readOnly hidden aria-hidden="true" tabIndex={-1} />
+              <Input type="password" name="password" autoComplete="current-password" placeholder="Admin password" required aria-label="Admin password" className="font-mono text-sm bg-input border-border" />
+              <Button type="submit" className="w-full"><ShieldCheck className="h-4 w-4 mr-2" />Unlock</Button>
+            </form>
+          </>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            Admin access isn't configured on this server. Set <code className="font-mono">ADMIN_PASSWORD</code> in the hosting environment to enable it.
+          </p>
+        )}
       </CardContent>
     </Card>
   );
@@ -170,7 +211,10 @@ function TimezoneToggle({ timezone, onChange }: { timezone: TimezoneMode; onChan
 
 export default function Home() {
   const chartRef = useRef<HTMLDivElement>(null);
-  const [activeTab, setActiveTab] = useState("connect");
+  const [activeTab, setActiveTab] = useState("data");
+  // A tab named in the URL (e.g. after unlocking) wins over the automatic choice.
+  const requestedTab = useRef<string | null>(null);
+  const defaultsAppliedFor = useRef<DexcomEnv | null>(null);
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [queryEnabled, setQueryEnabled] = useState(false);
@@ -180,6 +224,12 @@ export default function Home() {
   const localAbbr = getLocalTimezoneAbbr();
   const localName = getLocalTimezoneName();
   const tzLabel = timezone === "utc" ? "UTC" : localAbbr;
+
+  const me = trpc.auth.me.useQuery(undefined, { refetchOnWindowFocus: false });
+  const isAdmin = me.data?.role === "admin";
+  const signOut = trpc.auth.logout.useMutation({
+    onSettled: () => window.location.assign("/login"),
+  });
 
   const dexcomStatus = trpc.dexcom.status.useQuery(
     { env: dexcomEnv },
@@ -204,6 +254,27 @@ export default function Home() {
     { enabled: queryEnabled && !!startDate && !!endDate, refetchOnWindowFocus: false, retry: false }
   );
 
+  // Live readings from Dexcom Share, refreshed each minute while the tab is
+  // visible. Production only: this is the real account, and it must never be
+  // mixed into sandbox data.
+  const latest = trpc.dexcom.latest.useQuery(undefined, {
+    enabled: dexcomEnv === "production",
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
+    retry: false,
+  });
+  const liveReadings = useMemo(
+    () => (latest.data?.configured ? latest.data.readings : []),
+    [latest.data]
+  );
+  // The newest live reading, when it's newer than the official data's end.
+  const liveEnd = (() => {
+    const last = liveReadings.at(-1)?.systemTime;
+    const officialEnd = dataRange.data?.egvs?.end?.systemTime;
+    return last && officialEnd && parseUtc(last) > parseUtc(officialEnd) ? last : null;
+  })();
+
   const disconnectMutation = trpc.dexcom.disconnect.useMutation({
     onSuccess: () => { toast.success(`Disconnected from Dexcom (${dexcomEnv})`); dexcomStatus.refetch(); },
   });
@@ -214,6 +285,7 @@ export default function Home() {
     setQueryEnabled(false);
     setStartDate("");
     setEndDate("");
+    defaultsAppliedFor.current = null;
   };
 
   // Handle timezone change: convert existing dates to the new timezone display
@@ -242,6 +314,7 @@ export default function Home() {
     if (params.get("dexcom_error")) {
       const errorEnv = (params.get("env") as DexcomEnv) || "sandbox";
       setDexcomEnv(errorEnv);
+      requestedTab.current = "connect";
       setActiveTab("connect");
       const errorMsg = params.get("dexcom_error") || "Unknown error";
       toast.error(`Dexcom ${errorEnv} error: ${errorMsg}`, { duration: 8000 });
@@ -249,20 +322,39 @@ export default function Home() {
     }
   }, []);
 
+  // Default to the most recent three hours. With live data, "most recent" ends
+  // at the latest Share reading rather than the official data's end, which
+  // trails by about an hour. Applied once per environment, and only into empty
+  // inputs, so it never overwrites dates already chosen.
   useEffect(() => {
-    if (dataRange.data?.egvs) {
-      const egvRange = dataRange.data.egvs;
-      if (egvRange.start?.systemTime && egvRange.end?.systemTime) {
-        const endTime = new Date(egvRange.end.systemTime);
-        const startTime = new Date(endTime.getTime() - 3 * 60 * 60 * 1000);
-        setStartDate(apiDateToInput(startTime.toISOString(), timezone));
-        setEndDate(apiDateToInput(endTime.toISOString(), timezone));
-      }
-    }
-  }, [dataRange.data]);
+    const egvRange = dataRange.data?.egvs;
+    if (!egvRange?.start?.systemTime || !egvRange?.end?.systemTime) return;
+    const liveSettled = dexcomEnv !== "production" || latest.data !== undefined || latest.isError;
+    if (!liveSettled || defaultsAppliedFor.current === dexcomEnv) return;
+    defaultsAppliedFor.current = dexcomEnv;
+    if (startDate || endDate) return;
+    const endTime = new Date(liveEnd ?? egvRange.end.systemTime);
+    const startTime = new Date(endTime.getTime() - 3 * 60 * 60 * 1000);
+    setStartDate(apiDateToInput(startTime.toISOString(), timezone));
+    setEndDate(apiDateToInput(endTime.toISOString(), timezone));
+  }, [dataRange.data, latest.data, latest.isError, dexcomEnv]);
 
   useEffect(() => {
-    if (dexcomStatus.data?.connected) setActiveTab("data");
+    const tab = new URLSearchParams(window.location.search).get("tab");
+    if (tab && (TABS as readonly string[]).includes(tab)) {
+      requestedTab.current = tab;
+      setActiveTab(tab);
+      window.history.replaceState({}, "", "/");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (dexcomStatus.data === undefined) return;
+    if (requestedTab.current) {
+      requestedTab.current = null;
+      return;
+    }
+    setActiveTab(dexcomStatus.data.connected ? "data" : "connect");
   }, [dexcomStatus.data?.connected]);
 
   const handleConnect = async () => {
@@ -289,8 +381,8 @@ export default function Home() {
   };
 
   const handleExportCsv = () => {
-    if (!egvQuery.data?.records?.length) { toast.error("No data to export"); return; }
-    exportCsv(egvQuery.data.records, timezone, dexcomEnv, apiStartDate, apiEndDate);
+    if (!egvRecords?.length) { toast.error("No data to export"); return; }
+    exportCsv(egvRecords, timezone, dexcomEnv, apiStartDate, apiEndDate);
     toast.success("CSV exported successfully");
   };
 
@@ -307,6 +399,7 @@ export default function Home() {
       timezone,
       avgGlucose,
       recordCount,
+      liveCount,
       env: dexcomEnv,
     };
     const success = await exportChartPng(chartRef.current, dexcomEnv, meta);
@@ -314,8 +407,24 @@ export default function Home() {
     else toast.error("Failed to export chart");
   };
 
-  const egvRecords: any[] | undefined = egvQuery.data?.records;
+  const officialRecords: any[] | undefined = egvQuery.data?.records;
+  // Official records with any newer live readings spliced on the end. Recomputed
+  // as live data refreshes, so a window ending now keeps growing.
+  const merge = useMemo(
+    () =>
+      officialRecords
+        ? mergeLiveReadings(officialRecords, liveReadings as any[], {
+            start: apiStartDate,
+            end: apiEndDate,
+            enabled: dexcomEnv === "production",
+            queriedAt: egvQuery.dataUpdatedAt,
+          })
+        : null,
+    [officialRecords, liveReadings, apiStartDate, apiEndDate, dexcomEnv, egvQuery.dataUpdatedAt]
+  );
+  const egvRecords: any[] | undefined = merge?.records;
   const recordCount = egvRecords?.length ?? 0;
+  const liveCount = merge?.liveCount ?? 0;
 
   // Single pass, memoized: this used to run map + filter + reduce inside JSX on
   // every render, and again in the PNG export handler.
@@ -370,20 +479,33 @@ export default function Home() {
                 <><Circle className="h-2 w-2 shrink-0 fill-muted-foreground text-muted-foreground" /><span className="text-xs font-mono text-muted-foreground whitespace-nowrap">Disconnected</span></>
               )}
             </div>
+            {me.data?.signInRequired && (
+              <>
+                <Separator orientation="vertical" className="h-6 hidden sm:block" />
+                {isAdmin && <Badge variant="secondary" className="font-mono text-[10px] bg-primary/10 text-primary border-primary/20">Admin</Badge>}
+                <Button variant="ghost" size="sm" onClick={() => signOut.mutate()} disabled={signOut.isPending} aria-label="Sign out" className="h-8 px-2 text-xs font-mono text-muted-foreground hover:text-foreground">
+                  <LogOut className="h-3.5 w-3.5 sm:mr-1.5" /><span className="hidden sm:inline">Sign out</span>
+                </Button>
+              </>
+            )}
           </div>
         </div>
       </header>
 
       <main className="container py-6">
+        {dexcomEnv === "production" && (
+          <LiveGlucoseCard className="mb-6" data={latest.data} isLoading={latest.isLoading} timezone={timezone} />
+        )}
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList className="grid w-full grid-cols-2 h-auto gap-1 sm:inline-flex sm:w-fit sm:h-9 sm:gap-0 bg-secondary/50 border border-border mb-6">
-            <TabsTrigger value="connect" className={TAB_TRIGGER_CLS}><Plug className="h-3.5 w-3.5 mr-1.5 shrink-0" />Connect</TabsTrigger>
+            <TabsTrigger value="connect" className={TAB_TRIGGER_CLS}><Plug className="h-3.5 w-3.5 mr-1.5 shrink-0" />Connect{!isAdmin && <Lock className="h-3 w-3 ml-1.5 shrink-0 opacity-60" aria-label="Admin only" />}</TabsTrigger>
             <TabsTrigger value="data" className={TAB_TRIGGER_CLS} disabled={!dexcomStatus.data?.connected}><Activity className="h-3.5 w-3.5 mr-1.5 shrink-0" />EGV Data</TabsTrigger>
-            <TabsTrigger value="correlations" className={TAB_TRIGGER_CLS}><HeartPulse className="h-3.5 w-3.5 mr-1.5 shrink-0" />Health Correlations</TabsTrigger>
-            <TabsTrigger value="info" className={TAB_TRIGGER_CLS}><ExternalLink className="h-3.5 w-3.5 mr-1.5 shrink-0" />API Info</TabsTrigger>
+            <TabsTrigger value="correlations" className={TAB_TRIGGER_CLS}><HeartPulse className="h-3.5 w-3.5 mr-1.5 shrink-0" />Health Correlations{!isAdmin && <Lock className="h-3 w-3 ml-1.5 shrink-0 opacity-60" aria-label="Admin only" />}</TabsTrigger>
+            <TabsTrigger value="info" className={TAB_TRIGGER_CLS}><ExternalLink className="h-3.5 w-3.5 mr-1.5 shrink-0" />API Info{!isAdmin && <Lock className="h-3 w-3 ml-1.5 shrink-0 opacity-60" aria-label="Admin only" />}</TabsTrigger>
           </TabsList>
 
           <TabsContent value="connect" className="space-y-6">
+            {isAdmin ? (<>
             {isProduction && (
               <Card className="bg-amber-500/5 border-amber-500/20">
                 <CardContent className="pt-6">
@@ -488,6 +610,7 @@ export default function Home() {
                 </CardContent>
               </Card>
             </div>
+            </>) : <AdminOnlyCard tab="connect" adminEnabled={me.data?.adminEnabled ?? false} />}
           </TabsContent>
 
           <TabsContent value="data" className="space-y-6">
@@ -496,7 +619,7 @@ export default function Home() {
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <CardTitle className="text-base flex flex-wrap items-center gap-2">
                     <Activity className="h-4 w-4 shrink-0 text-primary" />EGV Query
-                    {recordCount > 0 && <Badge variant="secondary" className="font-mono text-xs ml-2">{recordCount} records</Badge>}
+                    {recordCount > 0 && <Badge variant="secondary" className="font-mono text-xs ml-2">{recordCount} records{liveCount > 0 ? ` · ${liveCount} live` : ""}</Badge>}
                   </CardTitle>
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                     {recordCount > 0 && (
@@ -554,6 +677,7 @@ export default function Home() {
                         Available range: <span className="text-foreground">{formatDate(dataRange.data.egvs.start.systemTime, timezone)}</span>
                         {" \u2192 "}
                         <span className="text-foreground">{formatDate(dataRange.data.egvs.end.systemTime, timezone)}</span>
+                        {liveEnd && <>{" \u00B7 live through "}<span className="text-foreground">{formatDate(liveEnd, timezone)}</span></>}
                         {" "}<span className="text-muted-foreground">(max 30-day window per query)</span>
                       </span>
                     </div>
@@ -586,7 +710,19 @@ export default function Home() {
                   <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 mt-4 text-xs font-mono text-muted-foreground">
                     <div className="flex items-center gap-1.5"><div className="w-3 h-0.5 shrink-0 bg-[oklch(0.75_0.15_60)]" /><span>80 / 180 mg/dL thresholds</span></div>
                     <div className="flex items-center gap-1.5"><div className="w-3 h-3 shrink-0 bg-[oklch(0.72_0.15_145)] opacity-10 rounded-sm" /><span>Target range</span></div>
+                    {liveCount > 0 && (
+                      <div className="flex items-center gap-1.5"><div className="w-4 shrink-0 border-t-2 border-dashed border-[oklch(0.72_0.15_180)]" /><span>Live (Dexcom Share)</span></div>
+                    )}
                   </div>
+                  {merge?.status === "mismatch" && (
+                    <div className="flex items-start gap-2 mt-3 px-3 py-2 rounded-md bg-amber-500/10 border border-amber-500/20 text-xs font-mono text-amber-400">
+                      <XCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                      <span>
+                        Live readings weren't added: where both sources overlap they disagree (typical difference {Math.round(merge.medianDiff ?? 0)} mg/dL).
+                        The Dexcom Share login may belong to a different account than the one connected here.
+                      </span>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             )}
@@ -596,10 +732,13 @@ export default function Home() {
           </TabsContent>
 
           <TabsContent value="correlations" className="space-y-6">
+            {isAdmin ? (<>
             <Correlations dexcomEnv={dexcomEnv} timezone={timezone} />
+            </>) : <AdminOnlyCard tab="correlations" adminEnabled={me.data?.adminEnabled ?? false} />}
           </TabsContent>
 
           <TabsContent value="info" className="space-y-6">
+            {isAdmin ? (<>
             <Card className="bg-card border-border">
               <CardHeader><CardTitle className="text-base">Dexcom API V3 {"\u2014"} EGV Endpoint</CardTitle></CardHeader>
               <CardContent className="space-y-4">
@@ -651,6 +790,7 @@ export default function Home() {
                 </div>
               </CardContent>
             </Card>
+            </>) : <AdminOnlyCard tab="info" adminEnabled={me.data?.adminEnabled ?? false} />}
           </TabsContent>
         </Tabs>
       </main>

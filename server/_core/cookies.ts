@@ -1,6 +1,6 @@
 import type { CookieOptions, Request } from "express";
 
-function isSecureRequest(req: Request) {
+export function isSecureRequest(req: Request) {
   if (req.protocol === "https") return true;
 
   const forwardedProto = req.headers["x-forwarded-proto"];
@@ -19,7 +19,10 @@ export function getSessionCookieOptions(
   return {
     httpOnly: true,
     path: "/",
-    sameSite: "none",
+    // Lax still travels on the top-level redirect back from Dexcom's OAuth
+    // page, but not on cross-site subrequests, which keeps mutations
+    // CSRF-resistant.
+    sameSite: "lax",
     secure: isSecureRequest(req),
   };
 }

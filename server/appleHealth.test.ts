@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { pearsonCorrelation } from "./appleHealth";
+
+// Never let these tests reach a real database. Without this, running the suite
+// with DATABASE_URL set would wipe every Apple Health row in production.
+vi.mock("./db", () => ({ getDb: async () => null }));
 
 // ── pearsonCorrelation ──────────────────────────────────────────────
 
@@ -51,9 +55,9 @@ describe("pearsonCorrelation", () => {
 describe("appleHealth tRPC router", () => {
   it("status returns uploaded: false when no data is loaded", async () => {
     const { appRouter } = await import("./routers");
-    const { createMockContext } = await import("./testHelpers");
+    const { createAdminContext } = await import("./testHelpers");
 
-    const ctx = createMockContext();
+    const ctx = createAdminContext();
     const caller = appRouter.createCaller(ctx);
 
     const status = await caller.appleHealth.status();
@@ -62,9 +66,9 @@ describe("appleHealth tRPC router", () => {
 
   it("buckets returns empty array when no data is loaded", async () => {
     const { appRouter } = await import("./routers");
-    const { createMockContext } = await import("./testHelpers");
+    const { createAdminContext } = await import("./testHelpers");
 
-    const ctx = createMockContext();
+    const ctx = createAdminContext();
     const caller = appRouter.createCaller(ctx);
 
     const buckets = await caller.appleHealth.buckets();
@@ -73,9 +77,9 @@ describe("appleHealth tRPC router", () => {
 
   it("workouts returns empty array when no data is loaded", async () => {
     const { appRouter } = await import("./routers");
-    const { createMockContext } = await import("./testHelpers");
+    const { createAdminContext } = await import("./testHelpers");
 
-    const ctx = createMockContext();
+    const ctx = createAdminContext();
     const caller = appRouter.createCaller(ctx);
 
     const workouts = await caller.appleHealth.workouts();
@@ -84,9 +88,9 @@ describe("appleHealth tRPC router", () => {
 
   it("correlations returns empty when no health data is loaded", async () => {
     const { appRouter } = await import("./routers");
-    const { createMockContext } = await import("./testHelpers");
+    const { createAdminContext } = await import("./testHelpers");
 
-    const ctx = createMockContext();
+    const ctx = createAdminContext();
     const caller = appRouter.createCaller(ctx);
 
     const result = await caller.appleHealth.correlations({
@@ -101,12 +105,28 @@ describe("appleHealth tRPC router", () => {
 
   it("clear returns success", async () => {
     const { appRouter } = await import("./routers");
-    const { createMockContext } = await import("./testHelpers");
+    const { createAdminContext } = await import("./testHelpers");
 
-    const ctx = createMockContext();
+    const ctx = createAdminContext();
     const caller = appRouter.createCaller(ctx);
 
     const result = await caller.appleHealth.clear();
     expect(result).toEqual({ success: true });
+  });
+
+  it("refuses every appleHealth procedure to a viewer", async () => {
+    const { appRouter } = await import("./routers");
+    const { createViewerContext } = await import("./testHelpers");
+    const caller = appRouter.createCaller(createViewerContext());
+
+    for (const call of [
+      () => caller.appleHealth.status(),
+      () => caller.appleHealth.buckets(),
+      () => caller.appleHealth.workouts(),
+      () => caller.appleHealth.clear(),
+      () => caller.appleHealth.correlations({ egvData: [] }),
+    ]) {
+      await expect(call()).rejects.toThrow(/Admin password required/);
+    }
   });
 });
