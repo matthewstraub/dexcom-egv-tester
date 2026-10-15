@@ -9,15 +9,12 @@ const mockClick = vi.fn();
 const mockAppendChild = vi.fn();
 const mockRemoveChild = vi.fn();
 
-// Mock DOM APIs
-const mockCreateObjectURL = vi.fn(() => "blob:mock-url");
-const mockRevokeObjectURL = vi.fn();
-
-// Set up globals before import
-vi.stubGlobal("URL", {
-  createObjectURL: mockCreateObjectURL,
-  revokeObjectURL: mockRevokeObjectURL,
-});
+// Mock DOM APIs. Only URL's two static methods are stubbed: the URL class
+// itself must stay real, because the test runner constructs URLs while
+// loading modules. Replacing the whole global made `await import` below
+// throw "URL is not a constructor" under Vitest 5.
+vi.spyOn(URL, "createObjectURL").mockImplementation(() => "blob:mock-url");
+vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
 
 const OriginalBlob = globalThis.Blob;
 vi.stubGlobal(
