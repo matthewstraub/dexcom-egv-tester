@@ -136,5 +136,5 @@ Browser → Render (Node.js/Express) → Dexcom API, Dexcom Share (optional)
 
 - **Frontend**: React 19 + Tailwind CSS 4 (served as static files by Express)
 - **Backend**: Express 4 + tRPC 11 (handles sign-in, the OAuth flow and API proxying)
-- **Database**: TiDB Cloud Serverless (Dexcom OAuth tokens)
+- **Database**: TiDB Cloud Serverless (Dexcom OAuth tokens and site settings)
 - **Access**: Password sign-in with viewer and admin roles; one set of Dexcom tokens stored per environment
