@@ -1,6 +1,6 @@
 # Dexcom EGV Tester — Technical Documentation
 
-**Version**: 2.4  
+**Version**: 2.5  
 **Last Updated**: October 14, 2026
 
 ---
@@ -50,8 +50,8 @@ The application follows a standard three-tier architecture with a React frontend
           ▼                     ▼              ▼
 ┌─────────────────┐ ┌───────────────────────┐ ┌──────────────────┐
 │ TiDB Cloud      │ │ Dexcom API            │ │ Dexcom Share     │
-│ Dexcom OAuth    │ │ api.dexcom.com        │ │ share2.dexcom.com│
-│ tokens          │ │ sandbox-api.dexcom.com│ │ (unofficial)     │
+│ OAuth tokens,   │ │ api.dexcom.com        │ │ share2.dexcom.com│
+│ site settings   │ │ sandbox-api.dexcom.com│ │ (unofficial)     │
 └─────────────────┘ └───────────────────────┘ └──────────────────┘
 ```
 
@@ -68,7 +68,7 @@ The application depends on three external services, plus an optional fourth for 
 | Service | Purpose | Credentials Required | Free Tier |
 |---------|---------|---------------------|-----------|
 | **Dexcom API** | OAuth2 authentication and EGV data retrieval | `DEXCOM_CLIENT_ID`, `DEXCOM_CLIENT_SECRET` | Yes (Sandbox is free; Production requires approval) |
-| **TiDB Cloud** | MySQL-compatible database for storing OAuth tokens | `DATABASE_URL` (connection string) | Yes (Serverless Starter: 5 GiB storage, 50M Request Units/month) |
+| **TiDB Cloud** | MySQL-compatible database for storing OAuth tokens and site settings | `DATABASE_URL` (connection string) | Yes (Serverless Starter: 5 GiB storage, 50M Request Units/month) |
 | **Render** | Web hosting and deployment | GitHub connection | Yes (Free tier: 750 hours/month, auto-sleep after 15 min inactivity) |
 | **Dexcom Share** (optional) | Near-real-time readings for the live card and chart (§3.4) | `DEXCOM_SHARE_USERNAME`, `DEXCOM_SHARE_PASSWORD` — the CGM wearer's own Dexcom login | Free; unofficial, no developer account |
 
@@ -94,7 +94,7 @@ The Dexcom API enforces a **maximum 30-day query window** per request. Dates mus
 
 ### 3.2 TiDB Cloud
 
-TiDB Cloud [2] provides a MySQL-compatible serverless database. The application uses it to persist Dexcom OAuth tokens (access token, refresh token, expiration time) so that users do not need to re-authenticate on every visit. The connection requires TLS/SSL, which is enforced by appending `?ssl={"rejectUnauthorized":true}` to the connection string.
+TiDB Cloud [2] provides a MySQL-compatible serverless database. The application uses it to persist Dexcom OAuth tokens (access token, refresh token, expiration time) so that users do not need to re-authenticate on every visit, and site-wide settings such as the chart range (§4.4). The connection requires TLS/SSL, which is enforced by appending `?ssl={"rejectUnauthorized":true}` to the connection string.
 
 ### 3.3 Render
 
@@ -126,7 +126,7 @@ Three rules protect the wearer's account:
 
 ## 4. Database Schema
 
-The database contains six tables managed by Drizzle ORM. Migrations are applied via `pnpm db:push` (which runs `drizzle-kit generate && drizzle-kit migrate`).
+The database contains three tables managed by Drizzle ORM. Migrations are applied via `pnpm db:push` (which runs `drizzle-kit generate && drizzle-kit migrate`).
 
 ### 4.1 `users` Table
 
@@ -162,19 +162,9 @@ Stores Dexcom OAuth tokens per environment. In single-user mode, `userId` is alw
 
 The combination of `userId` + `environment` is unique in practice — each environment stores exactly one set of tokens.
 
-### 4.3 Apple Health Tables
+### 4.3 Apple Health Tables (deleted)
 
-**No longer used.** Health Correlations, the only feature that read or wrote these tables, was removed in October 2026 (§7.5). They still hold the last import, and they stay in `drizzle/schema.ts` on purpose: Render's build runs `pnpm db:push`, so removing them from the schema would generate a migration that drops them on the next deploy. Deleting that data is a separate, deliberate decision. The description below is kept for reference.
-
-Three tables hold the results of an Apple Health import. The parsing itself happens in the browser (see §7.5); the server only persists and reads back what the worker sends.
-
-**`health_upload_jobs`** — one row per import, carrying the summary. `fileRef` is always `client-parsed`, and `status` is one of `pending` / `processing` / `completed` / `failed` (client-side parsing writes `completed` directly). Also stores `totalRecordsScanned`, `relevantDataPoints`, `workoutCount`, `metricsFound` (comma-separated), `dataRangeStart` / `dataRangeEnd`, and `bucketCount`.
-
-**`health_buckets`** — one row per metric per 15-minute bucket, keyed by `jobId`. Holds `bucketStart` / `bucketEnd` as ISO strings, the `metric` key, and the `avg` / `min` / `max` / `sum` / `count` aggregates. This is by far the largest table: a multi-year export can produce hundreds of thousands of rows, which is why writes are batched (§7.5).
-
-**`health_workouts`** — one row per workout, keyed by `jobId`: `activityType`, `activityLabel`, `duration`, optional `totalDistance` / `distanceUnit` / `totalEnergyBurned` / `energyUnit`, `startDate`, `endDate`, `sourceName`.
-
-Saving a new import clears all three tables first, so only the most recent import is ever queryable.
+The three tables that held the last Apple Health import — `health_upload_jobs`, `health_buckets` and `health_workouts` — were dropped in October 2026 by migration `drizzle/0005_jittery_warhawk.sql`, after Health Correlations was removed (§7.5). They held only summaries of an Apple Health export, which can be exported again from the iPhone's Health app.
 
 ### 4.4 `app_settings` Table
 
@@ -228,7 +218,7 @@ The table below maps each significant file to its responsibility in the applicat
 | `server/_core/session.ts` | Site sign-in (§7.8) — password-to-role check, signed session cookies, the `requireSession` gate, the failed-attempt limiter, and the self-contained sign-in page |
 | `server/_core/trpc.ts` | tRPC setup and the `viewerProcedure` / `adminProcedure` guards |
 | `server/_core/env.ts` | Reads `DEXCOM_CLIENT_ID`, `DEXCOM_CLIENT_SECRET` and the Dexcom Share credentials from the environment (the sign-in variables are read in `session.ts`) |
-| `drizzle/schema.ts` | Database table definitions (`users`, `dexcom_tokens`, `app_settings`, and the unused Apple Health tables in §4.3) using Drizzle ORM |
+| `drizzle/schema.ts` | Database table definitions (`users`, `dexcom_tokens`, `app_settings`) using Drizzle ORM |
 | `shared/const.ts` | Shared constants — Dexcom base URLs, environment types, timezone mode type, and the default chart range and its limits |
 | `client/src/main.tsx` | tRPC client — sends `dexcom.latest` outside the request batch (§7.7), and sends the browser to sign-in on a `401` |
 | `client/src/pages/Home.tsx` | Main UI — live card, tabbed interface (Connect, EGV Data, API Info) with the admin-only tabs locked for viewers, environment and timezone toggles, date inputs, export buttons, sign-out |
@@ -298,7 +288,7 @@ The PNG export includes a header above the chart containing: the chart title wit
 
 Removed in October 2026. Opening the tab made the server load the entire stored import in one response, and on Render's free instance that ran out of memory: replayed on ~284,000 synthetic rows, the `appleHealth.buckets` response alone needed ~430MB at its peak, most of it in superjson serialization. The feature wasn't being used, so it went rather than being rebuilt.
 
-The code is in git history, last present at commit `7fd94e1` (the page, chart, Web Worker, ZIP/XML parser, server procedures and their tests). Anyone restoring it should load buckets for the selected date range only, and keep large payloads out of superjson. The stored data is still in the tables described in §4.3.
+The code is in git history, last present at commit `7fd94e1` (the page, chart, Web Worker, ZIP/XML parser, server procedures and their tests). Anyone restoring it should load buckets for the selected date range only, and keep large payloads out of superjson. The stored data was deleted along with its tables (§4.3).
 
 ### 7.6 Raw Response Viewer
 
