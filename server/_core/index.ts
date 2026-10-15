@@ -6,6 +6,7 @@ import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerDexcomRoutes } from "../dexcomRoutes";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
+import { strictTransportSecurity } from "./securityHeaders";
 import { registerSessionRoutes, requireSession } from "./session";
 import { serveStatic, setupVite } from "./vite";
 
@@ -32,6 +33,8 @@ async function startServer() {
   const app = express();
   const server = createServer(app);
 
+  // First, so every HTTPS response carries it, the sign-in page included.
+  app.use(strictTransportSecurity);
   // Request bodies are small: the sign-in form and a couple of tRPC mutations.
   // These parsers run before the sign-in gate, so keep the limits tight. (The
   // old 50mb limit existed only for Apple Health uploads, since removed.)
