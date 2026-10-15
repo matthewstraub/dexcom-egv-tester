@@ -14,7 +14,7 @@ The whole site sits behind a password. A **viewer** password opens the EGV Data 
 - **UTC / local timezone toggle** applied consistently across inputs, axis labels, tooltips and exports. Dates are always converted to UTC before hitting the API.
 - **Raw response viewer** with syntax highlighting, so you can see exactly what Dexcom returned.
 - **Live current glucose (Production, optional)** — the official API runs an hour behind. With Dexcom Share credentials configured, a card above the tabs shows the latest reading, its trend and its age, refreshed every minute, and queries that run up to the present are extended with Share readings, drawn dashed. Share is unofficial; see [DOCUMENTATION.md §3.4](DOCUMENTATION.md#34-dexcom-share-optional).
-- **Sign-in with two roles** — viewer and admin passwords, signed session cookies, and a limit on failed attempts, all enforced on the server for every page and API call.
+- **Sign-in with two roles** — viewer and admin passwords, signed session cookies, and a limit on failed attempts, all enforced on the server for every page and API call. HTTPS is enforced with an HSTS header.
 - **Exports** — CSV (with a `source` column marking live readings), raw JSON, and a PNG of the chart with a metadata header.
 
 ---

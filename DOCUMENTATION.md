@@ -1,6 +1,6 @@
 # Dexcom EGV Tester — Technical Documentation
 
-**Version**: 2.5  
+**Version**: 2.6  
 **Last Updated**: October 14, 2026
 
 ---
@@ -214,7 +214,8 @@ The table below maps each significant file to its responsibility in the applicat
 | `server/settings.ts` | Site-wide settings in `app_settings` (§4.4): `getChartRange()` / `saveChartRange()` and the `chartRangeSchema` validation |
 | `server/dexcomShare.ts` | Dexcom Share client (§3.4) — sign-in sequence, 60-second cache, sign-in back-off, and the reading parser. `getLatestShareResult()` backs `dexcom.latest` |
 | `server/db.ts` | Lazy Drizzle connection helper (`getDb()`). Returns `null` when `DATABASE_URL` is unset, so local tooling runs without a database |
-| `server/_core/index.ts` | Express server entry point — registers the sign-in routes and gate first, then tRPC middleware, Dexcom routes, and Vite dev middleware |
+| `server/_core/index.ts` | Express server entry point — registers the HSTS header, then the sign-in routes and gate, then tRPC middleware, Dexcom routes, and Vite dev middleware |
+| `server/_core/securityHeaders.ts` | The `Strict-Transport-Security` (HSTS) header on HTTPS responses (§7.8) |
 | `server/_core/session.ts` | Site sign-in (§7.8) — password-to-role check, signed session cookies, the `requireSession` gate, the failed-attempt limiter, and the self-contained sign-in page |
 | `server/_core/trpc.ts` | tRPC setup and the `viewerProcedure` / `adminProcedure` guards |
 | `server/_core/env.ts` | Reads `DEXCOM_CLIENT_ID`, `DEXCOM_CLIENT_SECRET` and the Dexcom Share credentials from the environment (the sign-in variables are read in `session.ts`) |
@@ -334,6 +335,7 @@ The site's address isn't secret and its data is real, so the whole application s
 - **Sessions** are a signed cookie, `app_session_id`, holding the role and issue time with an HMAC-SHA256 under `SESSION_SECRET`. It is HttpOnly, `SameSite=Lax`, and Secure over HTTPS. The key is random rather than derived from a password, so a cookie reveals nothing about either password. Changing `SESSION_SECRET` signs everyone out; removing `ADMIN_PASSWORD` turns admin sessions into viewer sessions.
 - **Rate limits**: after 10 failed sign-ins from one address within 15 minutes, further attempts from it are refused until the window passes. Behind Render's proxy the address comes from `X-Forwarded-For`, and a client can add its own entries to that header, so there is also an overall cap: 30 failed sign-ins from anywhere within 15 minutes pause all new sign-ins for the rest of that window. That bounds guessing however the header is forged, and existing sessions are unaffected. Both counts are held in memory.
 - **Signed-out requests**: pages redirect to `/login?next=…`, where `next` must be a same-site path, so the redirect can't be used to send someone elsewhere. API calls get a `401`, and the client sends the browser to sign-in when it sees one.
+- **HTTPS only.** Every HTTPS response carries `Strict-Transport-Security: max-age=31536000` (`server/_core/securityHeaders.ts`), registered before everything else. After one visit, the browser uses HTTPS for the site for a year, even when it follows an `http://` link, so there is no unencrypted first request to intercept. The header is sent only over HTTPS (Render's proxy reports that in `X-Forwarded-Proto`), so local development on `http://localhost` doesn't get it.
 - **Fail closed.** In production, a missing `VIEWER_PASSWORD` or `SESSION_SECRET` shows a "not configured" page (HTTP 503) rather than serving the site openly. In development, an unset `VIEWER_PASSWORD` disables sign-in with a warning at startup, and every visitor is treated as admin.
 
 ---
@@ -460,10 +462,11 @@ Run the full test suite with:
 pnpm test
 ```
 
-There are 145 tests across thirteen files:
+There are 148 tests across fourteen files:
 
 | File | Tests | Covers |
 |------|-------|--------|
+| `server/securityHeaders.test.ts` | 3 | HSTS on HTTPS requests, including HTTPS a proxy terminated, and never on plain HTTP |
 | `server/settings.test.ts` | 17 | Chart-range validation, reading with fallbacks (nothing saved, unreadable or invalid value, unreadable table, no database), saving, and the viewer/admin split on the procedures |
 | `server/session.test.ts` | 31 | Auth-state resolution (fail-closed in production, open in development), passwords to roles, session tokens (signing, tampering, expiry), `next` validation, the per-address and overall sign-in limits, and the gate and sign-in handlers |
 | `server/dexcomShare.test.ts` | 25 | The Share sign-in sequence and its exact request bodies, session expiry, the sign-in back-off, caching and request coalescing, timestamp and trend parsing, and `dexcom.latest` |
@@ -478,7 +481,7 @@ There are 145 tests across thirteen files:
 | `server/dexcom.credentials.test.ts` | 2 | Dexcom credentials are configured |
 | `server/auth.logout.test.ts` | 1 | Session cookie is cleared on logout |
 
-**Two of these fail without Dexcom credentials**: both `dexcom.credentials` tests assert the `DEXCOM_*` variables are non-empty. A clean local run is therefore **143 passed / 2 failed** — treat that as the baseline rather than a regression. Nothing else needs a database or network: the router tests mock `getDb()`, the Share client tests use a scripted transport, and the `dexcom.latest` tests blank the Share credentials, so no test contacts Dexcom.
+**Two of these fail without Dexcom credentials**: both `dexcom.credentials` tests assert the `DEXCOM_*` variables are non-empty. A clean local run is therefore **146 passed / 2 failed** — treat that as the baseline rather than a regression. Nothing else needs a database or network: the router tests mock `getDb()`, the Share client tests use a scripted transport, and the `dexcom.latest` tests blank the Share credentials, so no test contacts Dexcom.
 
 ### 11.8 Local Development
 
