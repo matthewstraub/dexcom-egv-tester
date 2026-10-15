@@ -21,7 +21,7 @@ The whole site sits behind a password. A **viewer** password opens the EGV Data 
 
 ## Quickstart
 
-Requires Node 20+ and pnpm.
+Requires Node 22.12+ (the test runner needs it; building and running the server work from 20.19) and pnpm.
 
 ```bash
 pnpm install
