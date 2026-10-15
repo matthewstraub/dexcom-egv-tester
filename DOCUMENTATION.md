@@ -1,6 +1,6 @@
 # Dexcom EGV Tester — Technical Documentation
 
-**Version**: 2.6  
+**Version**: 2.7  
 **Last Updated**: October 14, 2026
 
 ---
@@ -382,20 +382,20 @@ You can register multiple redirect URIs in the Dexcom developer portal simultane
 | **Styling** | Tailwind CSS | 4.1 | Utility-first CSS framework |
 | **UI components** | shadcn/ui (Radix primitives) | Various | Accessible, composable UI components |
 | **Charting** | Recharts | 2.15 | Interactive glucose timeline chart |
-| **Client-server RPC** | tRPC | 11.6 | Type-safe API calls between frontend and backend |
+| **Client-server RPC** | tRPC | 11.10 | Type-safe API calls between frontend and backend |
 | **Data fetching** | TanStack React Query | 5.90 | Server state management, caching, and refetching |
-| **Routing** | Wouter | 3.3 | Lightweight client-side routing |
-| **Backend framework** | Express | 4.21 | HTTP server and middleware |
-| **HTTP client** | Axios | 1.12 | Server-side HTTP requests to Dexcom API |
-| **ORM** | Drizzle ORM | 0.44 | Type-safe database queries and schema management |
-| **Database driver** | mysql2 | 3.15 | MySQL/TiDB connection driver |
+| **Routing** | Wouter | 3.7 | Lightweight client-side routing |
+| **Backend framework** | Express | 4.22 | HTTP server and middleware |
+| **HTTP client** | Axios | 1.20 | Server-side HTTP requests to Dexcom API |
+| **ORM** | Drizzle ORM | 0.45 | Type-safe database queries and schema management |
+| **Database driver** | mysql2 | 3.24 | MySQL/TiDB connection driver |
 | **Schema validation** | Zod | 4.1 | Input validation for tRPC procedures |
 | **Serialization** | SuperJSON | 1.13 | Preserves Date objects across tRPC boundary |
-| **Build tool** | Vite | 7.1 | Frontend bundling and dev server |
-| **Server bundler** | esbuild | 0.25 | Server-side code bundling for production |
+| **Build tool** | Vite | 7.3 | Frontend bundling and dev server |
+| **Server bundler** | esbuild | 0.28 | Server-side code bundling for production |
 | **TypeScript** | TypeScript | 5.9 | Type safety across the full stack |
-| **Testing** | Vitest | 2.1 | Unit testing framework |
-| **Package manager** | pnpm | 10.4 | Fast, disk-efficient package management |
+| **Testing** | Vitest | 5.0 | Unit testing framework (needs Node 22.12+) |
+| **Package manager** | pnpm | 10.4 | Pinned by `packageManager` in `package.json`; it isn't a project dependency |
 
 ---
 
