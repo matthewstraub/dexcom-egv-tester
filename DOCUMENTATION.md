@@ -1,7 +1,7 @@
 # Dexcom EGV Tester — Technical Documentation
 
-**Version**: 2.7  
-**Last Updated**: October 14, 2026
+**Version**: 2.8  
+**Last Updated**: November 8, 2026
 
 ---
 
@@ -389,7 +389,7 @@ You can register multiple redirect URIs in the Dexcom developer portal simultane
 | **HTTP client** | Axios | 1.20 | Server-side HTTP requests to Dexcom API |
 | **ORM** | Drizzle ORM | 0.45 | Type-safe database queries and schema management |
 | **Database driver** | mysql2 | 3.24 | MySQL/TiDB connection driver |
-| **Schema validation** | Zod | 4.1 | Input validation for tRPC procedures |
+| **Schema validation** | Zod | 4.6 | Input validation for tRPC procedures |
 | **Serialization** | SuperJSON | 1.13 | Preserves Date objects across tRPC boundary |
 | **Build tool** | Vite | 7.3 | Frontend bundling and dev server |
 | **Server bundler** | esbuild | 0.28 | Server-side code bundling for production |
